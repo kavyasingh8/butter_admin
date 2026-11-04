@@ -18,7 +18,7 @@ import {
   User,
 } from 'lucide-react';
 import { useAdminMenu, toArray } from '../../../../../providers/AdminMenuContext';
-import { Inventory, InventoryItem } from '../../../../../types';
+import { DropdownChoice, Inventory, InventoryItem } from '../../../../../types';
 import { fetchNui } from '../../../../../utils/fetchNui';
 import { cn } from '../../../../../utils/cn';
 import Pagination from '../../../../ui/Pagination';
@@ -141,7 +141,36 @@ const InventoryHub: React.FC<InventoryProps> = ({ searchQuery }) => {
   const [removing, setRemoving] = useState<{ item: InventoryItem; count: number } | null>(null);
   const [clearing, setClearing] = useState(false);
 
+  const [catalog, setCatalog] = useState<{ name: string; label: string }[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+
   const activeSearch = containerSearch || searchQuery;
+
+  // Every registered item, fetched once when the Add Item modal first opens.
+  useEffect(() => {
+    if (!addOpen || catalog.length > 0) return;
+    setCatalogLoading(true);
+    fetchNui<DropdownChoice[]>('getChoices', { provider: 'items' }, [])
+      .then((choices) =>
+        setCatalog(
+          toArray<DropdownChoice>(choices)
+            .filter((c) => c.Source != null && c.Source !== '')
+            .map((c) => ({ name: String(c.Source), label: c.Text || String(c.Source) })),
+        ),
+      )
+      .catch(() => setCatalog([]))
+      .finally(() => setCatalogLoading(false));
+  }, [addOpen, catalog.length]);
+
+  const filteredCatalog = useMemo(() => {
+    const query = newItem.name.trim().toLowerCase();
+    if (!query) return catalog;
+    // Keep the list intact once an exact item is picked, so clicking doesn't collapse it.
+    if (catalog.some((entry) => entry.name === newItem.name)) return catalog;
+    return catalog.filter(
+      (entry) => entry.name.toLowerCase().includes(query) || entry.label.toLowerCase().includes(query),
+    );
+  }, [catalog, newItem.name]);
 
   const loadContainers = useCallback(
     async (page: number) => {
@@ -583,6 +612,7 @@ const InventoryHub: React.FC<InventoryProps> = ({ searchQuery }) => {
 
       {addOpen && (
         <Modal
+          width="max-w-lg"
           title={t('ui.pages.database.inventory.asset_dispatch')}
           subtitle={selectedLabel?.name}
           media={
@@ -613,6 +643,51 @@ const InventoryHub: React.FC<InventoryProps> = ({ searchQuery }) => {
                 onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
                 onKeyDown={(e) => e.key === 'Enter' && addItem()}
               />
+              <div className="mt-2 h-72 overflow-y-auto custom-scrollbar rounded-xl border border-white/5 bg-black/20 p-1.5 space-y-1">
+                {catalogLoading && catalog.length === 0 ? (
+                  Array.from({ length: 6 }, (_, i) => (
+                    <div key={i} className="h-[52px] rounded-lg bg-white/[0.03] animate-pulse" />
+                  ))
+                ) : filteredCatalog.length === 0 ? (
+                  <EmptyState icon={<Search size={28} />} title={t('ui.pages.database.inventory.no_matching_items')} />
+                ) : (
+                  filteredCatalog.map((entry) => {
+                    const active = newItem.name === entry.name;
+                    return (
+                      <button
+                        key={entry.name}
+                        type="button"
+                        onClick={() => setNewItem({ ...newItem, name: entry.name })}
+                        onDoubleClick={() => {
+                          setNewItem({ ...newItem, name: entry.name });
+                          void runAction('AddItem', { item: entry.name, count: newItem.count }).then((ok) => {
+                            if (ok) {
+                              setAddOpen(false);
+                              setNewItem({ name: '', count: 1 });
+                            }
+                          });
+                        }}
+                        className={cn(
+                          'w-full flex items-center gap-3 min-w-0 px-2 py-1.5 rounded-lg border text-left transition-colors',
+                          active
+                            ? 'border-accent/40 bg-accent/10'
+                            : 'border-transparent hover:bg-white/5 hover:border-white/10',
+                        )}
+                      >
+                        <span className="w-10 h-10 rounded-lg bg-black/30 border border-white/5 flex items-center justify-center shrink-0">
+                          <InventoryItemImage key={entry.name} item={entry} className="w-8 h-8 object-contain" />
+                        </span>
+                        <span className="min-w-0">
+                          <span className={cn('block font-semibold truncate', active ? 'text-accent' : 'text-primary')}>
+                            {entry.label}
+                          </span>
+                          <span className="block font-mono text-[13px] text-primary/70 truncate">{entry.name}</span>
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
             </div>
             <div>
               <Label>{t('ui.pages.database.inventory.quantity_factor')}</Label>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Package } from 'lucide-react';
+import { X } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 interface InventoryItemImageProps {
@@ -23,28 +23,12 @@ export const InventoryItemImage: React.FC<InventoryItemImageProps> = ({ item, cl
   const [failed, setFailed] = useState(false);
 
   if (failed) {
-    const initials = (item.label || item.name)
-      .split(/[\s_-]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0])
-      .join('')
-      .toUpperCase();
-
     return (
       <div
-        title={item.label || item.name}
-        className={cn(
-          className ?? 'w-10 h-10',
-          'relative flex items-center justify-center rounded-xl border border-dashed border-white/15 bg-gradient-to-br from-white/[0.06] to-white/[0.01] text-white/25',
-        )}
+        title={`${item.label || item.name} (no image)`}
+        className={cn(className ?? 'w-10 h-10', 'flex items-center justify-center text-red-400/60')}
       >
-        <Package className="w-1/2 h-1/2" strokeWidth={1.5} />
-        {initials && (
-          <span className="absolute bottom-0.5 right-1 text-[9px] font-mono font-bold text-white/30 leading-none">
-            {initials}
-          </span>
-        )}
+        <X className="w-[90%] h-[90%]" strokeWidth={2.5} />
       </div>
     );
   }

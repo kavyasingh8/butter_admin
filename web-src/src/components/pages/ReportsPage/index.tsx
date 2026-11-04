@@ -12,7 +12,7 @@ import { ReportActionBar } from './components/OpenReport/ReportActionBar';
 import { ReportClosingNotes } from './components/OpenReport/ReportClosingNotes';
 import { ReportChatView } from './components/OpenReport/ReportChatView';
 import { ReportMessageInput } from './components/OpenReport/ReportMessageInput';
-import { DeleteModal } from './components/ReportModals';
+import { CloseTicketModal, DeleteModal } from './components/ReportModals';
 import { ReportTypeFilter } from './components/ReportTypeFilter';
 import { SearchField } from '../../ui/SearchField';
 import { SortSelect } from '../../ui/SortSelect';
@@ -33,6 +33,8 @@ const ReportsPage: React.FC = () => {
   const [claimFilter, setClaimFilter] = useState<ClaimFilter>('all');
   const [sort, setSort] = useState<ReportSort>('newest');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showCloseModal, setShowCloseModal] = useState(false);
+  const [closingNotes, setClosingNotes] = useState('');
 
   const isSmall = menuSize === 'Small';
   const reportChatRef = useRef<HTMLDivElement>(null);
@@ -123,10 +125,26 @@ const ReportsPage: React.FC = () => {
 
   const handleDeleteReport = () => {
     if (!openedReport) return;
-    fetchNui('closeReport', { reportId: openedReport.Id }).catch(() => {});
+    fetchNui('deleteReport', { reportId: openedReport.Id }).catch(() => {});
     showCheckmark();
     setShowDeleteModal(false);
     setTimeout(() => setOpenedReport(null), 1700);
+  };
+
+  // Closing keeps the report: it moves to the Closed tab where it can be reopened.
+  const handleCloseReport = () => {
+    if (!openedReport || !closingNotes.trim()) return;
+    fetchNui('closeReport', { reportId: openedReport.Id, notes: closingNotes.trim() }).catch(() => {});
+    showCheckmark();
+    setShowCloseModal(false);
+    setClosingNotes('');
+    setMessageInput('');
+  };
+
+  const handleReopenReport = () => {
+    if (!openedReport) return;
+    fetchNui('reopenReport', { reportId: openedReport.Id }).catch(() => {});
+    showCheckmark();
   };
 
   const handleClaimReport = () => {
@@ -214,6 +232,8 @@ const ReportsPage: React.FC = () => {
                   onBack={() => setOpenedReport(null)}
                   onExport={handleExportTranscript}
                   onDelete={() => setShowDeleteModal(true)}
+                  onClose={() => setShowCloseModal(true)}
+                  onReopen={handleReopenReport}
                   onClaim={handleClaimReport}
                 />
 
@@ -247,6 +267,14 @@ const ReportsPage: React.FC = () => {
       )}
 
       {showDeleteModal && <DeleteModal onCancel={() => setShowDeleteModal(false)} onConfirm={handleDeleteReport} />}
+      {showCloseModal && (
+        <CloseTicketModal
+          closingNotes={closingNotes}
+          setClosingNotes={setClosingNotes}
+          onCancel={() => setShowCloseModal(false)}
+          onConfirm={handleCloseReport}
+        />
+      )}
     </div>
   );
 };

@@ -8,6 +8,8 @@ interface ReportActionBarProps {
   onBack: () => void;
   onExport: (report: Report) => void;
   onDelete: () => void;
+  onClose: () => void;
+  onReopen: () => void;
   onClaim?: () => void;
 }
 
@@ -16,6 +18,8 @@ export const ReportActionBar: React.FC<ReportActionBarProps> = ({
   onBack,
   onExport,
   onDelete,
+  onClose,
+  onReopen,
   onClaim,
 }) => (
   <div className="flex flex-col gap-4 mb-6 w-full">
@@ -71,20 +75,36 @@ export const ReportActionBar: React.FC<ReportActionBarProps> = ({
             <i className="fa-solid fa-hand"></i> Claim
           </button>
         )}
-        {currentReport.Status === 'Closed' && (
+        {currentReport.Status !== 'Closed' && (
           <button
-            className="h-9 px-4 rounded-lg text-muted hover:text-white hover:bg-white/10 flex items-center gap-2 border border-border/50 transition-all text-[11px] font-rajdhani font-bold uppercase tracking-wider"
-            onClick={() => onExport(currentReport)}
+            className="h-9 px-4 rounded-lg text-orange-400 hover:text-white hover:bg-orange-500/20 flex items-center gap-2 border border-orange-500/20 transition-all text-[11px] font-rajdhani font-bold uppercase tracking-wider"
+            onClick={onClose}
           >
-            <i className="fa-solid fa-file-export text-[10px]"></i> Export
+            <i className="fa-solid fa-lock text-[10px]"></i> Close
           </button>
         )}
-        <button
-          className="h-9 px-4 rounded-lg text-red-400 hover:text-white hover:bg-red-500/20 flex items-center gap-2 border border-red-500/20 transition-all text-[11px] font-rajdhani font-bold uppercase tracking-wider"
-          onClick={onDelete}
-        >
-          <i className="fa-solid fa-trash-can text-[10px]"></i> Delete
-        </button>
+        {currentReport.Status === 'Closed' && (
+          <>
+            <button
+              className="h-9 px-4 rounded-lg text-green-400 hover:text-white hover:bg-green-500/20 flex items-center gap-2 border border-green-500/20 transition-all text-[11px] font-rajdhani font-bold uppercase tracking-wider"
+              onClick={onReopen}
+            >
+              <i className="fa-solid fa-lock-open text-[10px]"></i> Reopen
+            </button>
+            <button
+              className="h-9 px-4 rounded-lg text-muted hover:text-white hover:bg-white/10 flex items-center gap-2 border border-border/50 transition-all text-[11px] font-rajdhani font-bold uppercase tracking-wider"
+              onClick={() => onExport(currentReport)}
+            >
+              <i className="fa-solid fa-file-export text-[10px]"></i> Export
+            </button>
+            <button
+              className="h-9 px-4 rounded-lg text-red-400 hover:text-white hover:bg-red-500/20 flex items-center gap-2 border border-red-500/20 transition-all text-[11px] font-rajdhani font-bold uppercase tracking-wider"
+              onClick={onDelete}
+            >
+              <i className="fa-solid fa-trash-can text-[10px]"></i> Delete
+            </button>
+          </>
+        )}
       </div>
     </div>
 

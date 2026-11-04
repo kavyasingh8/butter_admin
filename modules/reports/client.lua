@@ -4,7 +4,7 @@ local playerReportOpen = false
 ---@return table?
 local function getMyReport()
     for _, report in ipairs(reports) do
-        if report.ServerId == cache.serverId then return report end
+        if report.ServerId == cache.serverId and report.Status ~= 'Closed' then return report end
     end
 end
 
@@ -109,7 +109,17 @@ RegisterNUICallback('sendReportMessage', function(data, cb)
 end)
 
 RegisterNUICallback('closeReport', function(data, cb)
-    TriggerServerEvent('butter_admin:server:closeReport', data.reportId)
+    TriggerServerEvent('butter_admin:server:closeReport', data.reportId, data.notes)
+    cb(true)
+end)
+
+RegisterNUICallback('reopenReport', function(data, cb)
+    TriggerServerEvent('butter_admin:server:reopenReport', data.reportId)
+    cb(true)
+end)
+
+RegisterNUICallback('deleteReport', function(data, cb)
+    TriggerServerEvent('butter_admin:server:deleteReport', data.reportId)
     cb(true)
 end)
 

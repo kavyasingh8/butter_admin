@@ -74,6 +74,25 @@ local function isReportOwner(report, source, license)
     return report.ServerId == source or (license ~= nil and report.Identifier == license)
 end
 
+---@param report table
+---@return boolean
+local function isActive(report)
+    return report.Status ~= 'Closed'
+end
+
+--- Closed reports stay in memory for staff to review or reopen; only the
+--- newest ones are kept so they can't pile up forever.
+local function pruneClosedReports()
+    local limit = Config.Reports.MaxClosedReports or 50
+    local closed = 0
+    for i = #reports, 1, -1 do
+        if not isActive(reports[i]) then
+            closed = closed + 1
+            if closed > limit then table.remove(reports, i) end
+        end
+    end
+end
+
 ---@return number
 local function generateReportId()
     while true do
@@ -97,7 +116,7 @@ function SyncReportsForPlayer(source)
 
     local license = GetIdentifier(source, 'license')
     for _, report in ipairs(reports) do
-        if isReportOwner(report, source, license) then
+        if isActive(report) and isReportOwner(report, source, license) then
             -- Re-attach a report that survived the owner's reconnect.
             report.ServerId, report.OpenById = source, source
             return TriggerClientEvent('butter_admin:client:syncReports', source, { report })
@@ -112,11 +131,16 @@ end
 ---@param operation 'upsert'|'message'|'remove'
 ---@param message? table
 local function pushReportChange(report, operation, message)
-    local payload = operation == 'upsert' and report or report.Id
     for _, playerId in ipairs(GetPlayers()) do
         local target = tonumber(playerId)
-        if target == report.ServerId or canManageReports(target) then
-            TriggerClientEvent('butter_admin:client:reportChanged', target, operation, payload, message)
+        local op = operation
+        if not canManageReports(target) then
+            -- Players only ever see their own report, and only while it is open.
+            if target ~= report.ServerId then op = nil
+            elseif not isActive(report) then op = 'remove' end
+        end
+        if op then
+            TriggerClientEvent('butter_admin:client:reportChanged', target, op, op == 'upsert' and report or report.Id, message)
         end
     end
 end
@@ -240,7 +264,9 @@ RegisterNetEvent('butter_admin:server:createReport', function(data)
     local license = GetIdentifier(source, 'license')
 
     for _, report in ipairs(reports) do
-        if isReportOwner(report, source, license) then return Notify(source, locale('notify.report_already_open'), 'error') end
+        if isActive(report) and isReportOwner(report, source, license) then
+            return Notify(source, locale('notify.report_already_open'), 'error')
+        end
     end
 
     -- Stops an open/close loop from spamming staff and the webhook.
@@ -291,7 +317,7 @@ RegisterNetEvent('butter_admin:server:sendReportMessage', function(reportId, mes
     local source = source
     message = SanitizeString(message, 512)
     local report = message and findReport(reportId)
-    if not report then return end
+    if not report or not isActive(report) then return end
 
     local isStaff = canManageReports(source)
     if not isStaff and not isReportOwner(report, source, GetIdentifier(source, 'license')) then return end
@@ -318,7 +344,7 @@ RegisterNetEvent('butter_admin:server:claimReport', function(reportId)
     if not canManageReports(source) then return end
 
     local report = findReport(reportId)
-    if not report then return end
+    if not report or not isActive(report) then return end
     if report.ClaimedBy then return Notify(source, locale('notify.report_already_claimed'), 'error') end
 
     report.ClaimedBy, report.ClaimedByName = source, GetDisplayName(source)
@@ -326,14 +352,25 @@ RegisterNetEvent('butter_admin:server:claimReport', function(reportId)
     Notify(source, locale('notify.report_claimed'), 'success')
 end)
 
-RegisterNetEvent('butter_admin:server:closeReport', function(reportId)
+---@param report table
+---@param closerName string
+---@param notes string?
+local function markClosed(report, closerName, notes)
+    report.Status = 'Closed'
+    report.ClosedBy = closerName
+    report.ClosingNotes = notes
+    report.ClosedAt = os.date('%Y-%m-%d %H:%M')
+    report.TypingAdmins = nil
+end
+
+RegisterNetEvent('butter_admin:server:closeReport', function(reportId, notes)
     local source = source
-    local report, index = findReport(reportId)
-    if not report then return end
+    local report = findReport(reportId)
+    if not report or not isActive(report) then return end
     if not canManageReports(source) and not isReportOwner(report, source, GetIdentifier(source, 'license')) then return end
 
     local closerName = GetDisplayName(source)
-    table.remove(reports, index)
+    markClosed(report, closerName, SanitizeString(notes, 512))
     sendTranscripts(report, source, closerName)
 
     local owner = report.ServerId
@@ -342,8 +379,53 @@ RegisterNetEvent('butter_admin:server:closeReport', function(reportId)
             :format(locale('info.report_close'), locale('info.report_closed')))
     end
 
-    pushReportChange(report, 'remove')
+    pushReportChange(report, 'upsert')
+    pruneClosedReports()
     Notify(source, locale('notify.report_closed'), 'success')
+end)
+
+RegisterNetEvent('butter_admin:server:reopenReport', function(reportId)
+    local source = source
+    if not canManageReports(source) then return end
+
+    local report = findReport(reportId)
+    if not report or isActive(report) then return end
+
+    -- The owner may have opened a new report since; only one can be active.
+    for _, other in ipairs(reports) do
+        if other ~= report and isActive(other) and report.Identifier and other.Identifier == report.Identifier then
+            return Notify(source, locale('notify.report_reopen_blocked'), 'error')
+        end
+    end
+
+    report.Status = 'Active'
+    report.ClosedBy, report.ClosingNotes, report.ClosedAt = nil, nil, nil
+    pushReportChange(report, 'upsert')
+    Notify(source, locale('notify.report_reopened'), 'success')
+
+    local owner = report.ServerId
+    if owner and owner ~= source then
+        Notify(owner, locale('notify.report_reopened_owner'), 'inform')
+    end
+
+    SendWebhook('report', 'Report Reopened', 'A closed report has been reopened.', 3447003, {
+        { name = 'Report ID', value = tostring(report.Id), inline = true },
+        { name = 'Opened By', value = ('%s (%s)'):format(report.OpenBy, report.OpenById), inline = true },
+        { name = 'Reopened By', value = ('%s (%s)'):format(GetDisplayName(source), source), inline = true },
+    }, source)
+end)
+
+RegisterNetEvent('butter_admin:server:deleteReport', function(reportId)
+    local source = source
+    if not canManageReports(source) then return end
+
+    local report, index = findReport(reportId)
+    -- Only closed reports can be deleted, so a transcript always exists first.
+    if not report or isActive(report) then return end
+
+    table.remove(reports, index)
+    pushReportChange(report, 'remove')
+    Notify(source, locale('notify.report_deleted'), 'success')
 end)
 
 RegisterNetEvent('butter_admin:server:setReportTyping', function(reportId, isTyping)
@@ -351,7 +433,7 @@ RegisterNetEvent('butter_admin:server:setReportTyping', function(reportId, isTyp
     if not canManageReports(source) then return end
 
     local report = findReport(reportId)
-    if not report then return end
+    if not report or not isActive(report) then return end
 
     local name = GetDisplayName(source)
     local typing = report.TypingAdmins or {}
@@ -422,15 +504,18 @@ AddEventHandler('playerDropped', function()
         return
     end
 
-    for i = #reports, 1, -1 do
-        local report = reports[i]
+    for _, report in ipairs(reports) do
         if report.ServerId == source then
-            SendWebhook('report', 'Report Closed (Disconnect)', 'Report automatically closed because the player disconnected.', 10038562, {
-                { name = 'Report ID', value = tostring(report.Id), inline = true },
-                { name = 'Player', value = ('%s (%s)'):format(report.OpenBy, source), inline = true },
-            }, source)
-            table.remove(reports, i)
-            pushReportChange(report, 'remove')
+            report.ServerId = nil
+            if isActive(report) then
+                SendWebhook('report', 'Report Closed (Disconnect)', 'Report automatically closed because the player disconnected.', 10038562, {
+                    { name = 'Report ID', value = tostring(report.Id), inline = true },
+                    { name = 'Player', value = ('%s (%s)'):format(report.OpenBy, source), inline = true },
+                }, source)
+                markClosed(report, 'System', 'Player disconnected')
+                pushReportChange(report, 'upsert')
+            end
         end
     end
+    pruneClosedReports()
 end)

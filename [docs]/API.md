@@ -53,7 +53,7 @@ Objects: `spawnObject`, `deleteObject`, `requestObjects`.
 
 Fun: `flingPlayer`, `makeDrunk`, `setOnFire`, `playSound`, `forceAnimation`, `sendToJailbox`, `damageVehicle`, `kidnapVan`, `registerKidnapEntities`, `cleanupKidnap`, `ufoKidnap`, `ghostTroll`, `animalAttack`.
 
-Reports and chat: `createReport`, `sendReportMessage`, `claimReport`, `closeReport`, `setReportTyping`, `setReportsMuted`, `requestReports`, `sendStaffMessage`.
+Reports and chat: `createReport`, `sendReportMessage`, `claimReport`, `closeReport`, `reopenReport`, `deleteReport`, `setReportTyping`, `setReportsMuted`, `requestReports`, `sendStaffMessage`.
 
 Access and server: `requestMenu`, `saveRank`, `deleteRank`, `saveAdmin`, `deleteAdmin`, `setDiscordLogs`, `resourceAction`, `subscribeDashboard`, `runConsoleCommand`.
 

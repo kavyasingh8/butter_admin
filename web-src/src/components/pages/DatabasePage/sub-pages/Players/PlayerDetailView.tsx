@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Car, Check, Eye, EyeOff, Home, Loader2, Package, Pencil, Trash2 } from 'lucide-react';
-import { FactionMembership, Player, PlayerVehicle } from '../../../../../types';
+import { ArrowLeft, Check, Eye, EyeOff, Loader2, Pencil, Trash2 } from 'lucide-react';
+import { Player, PlayerProfile, PlayerVehicle } from '../../../../../types';
 import { useAdminMenu } from '../../../../../providers/AdminMenuContext';
 import { fetchNui } from '../../../../../utils/fetchNui';
 import { cn } from '../../../../../utils/cn';
@@ -9,22 +9,20 @@ import { CopyButton } from '../../../../ui/CopyButton';
 import { Select } from '../../../../ui/Select';
 import { vehicleStateTone } from '../Vehicles';
 import {
-  Badge,
+  Avatar,
   Button,
-  Column,
-  DataTable,
-  EmptyState,
   Field,
   IconButton,
   Label,
   Meter,
   Modal,
   Panel,
-  Section,
   Segmented,
   StatusDot,
+  VehicleImage,
   formatMoney,
   inputClass,
+  membershipLabel,
 } from '../../ui';
 
 interface PlayerDetailViewProps {
@@ -32,25 +30,37 @@ interface PlayerDetailViewProps {
   onBack: () => void;
 }
 
-type AssetTab = 'vehicles' | 'properties' | 'inventory';
-type DetailProperty = NonNullable<NonNullable<Player['Details']>['properties']>[number];
-
 const STATES = ['Stored', 'Out', 'Impounded'] as const;
 
-const membershipLabel = (membership: FactionMembership | string | undefined, fallback: string) => {
-  if (!membership) return fallback;
-  if (typeof membership === 'string') return membership;
-  const name = membership.label || membership.name || fallback;
-  const grade = membership.grade?.label || membership.grade?.name;
-  return grade ? `${name} (${grade})` : name;
-};
+const SectionTitle: React.FC<{ title: string; count?: number }> = ({ title, count }) => (
+  <div className="flex items-center gap-2 px-5 py-3.5 border-b border-white/5 shrink-0">
+    <h4 className="text-lg font-semibold text-primary">{title}</h4>
+    {count !== undefined && <span className="text-lg text-primary/50 tabular-nums">{count}</span>}
+  </div>
+);
+
+const GroupLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <p className="px-5 pt-5 pb-1.5 text-sm font-semibold uppercase tracking-wider text-primary/50">{children}</p>
+);
+
+const Row: React.FC<{ label: string; mono?: boolean; children: React.ReactNode }> = ({ label, mono, children }) => (
+  <div className="flex items-center justify-between gap-4 px-5 py-2 min-h-[46px]">
+    <span className="text-lg text-primary/70 shrink-0">{label}</span>
+    <span className={cn('min-w-0 flex items-center gap-1.5 text-primary', mono ? 'font-mono text-base' : 'text-lg')}>
+      {children}
+    </span>
+  </div>
+);
+
+const Empty: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <p className="px-5 py-6 text-lg text-primary/50">{children}</p>
+);
 
 const PlayerDetailView: React.FC<PlayerDetailViewProps> = ({ player: initialPlayer, onBack }) => {
   const { t, garages, jobs, gangs, players } = useAdminMenu();
-  const [player, setPlayer] = useState<Player>(initialPlayer);
+  const [player, setPlayer] = useState<PlayerProfile>(initialPlayer);
   const [loading, setLoading] = useState(true);
   const [ipRevealed, setIpRevealed] = useState(false);
-  const [assetTab, setAssetTab] = useState<AssetTab>('vehicles');
 
   const [vehicle, setVehicle] = useState<PlayerVehicle | null>(null);
   const [newPlate, setNewPlate] = useState('');
@@ -63,13 +73,13 @@ const PlayerDetailView: React.FC<PlayerDetailViewProps> = ({ player: initialPlay
   const profileId = initialPlayer.CitizenId ?? initialPlayer.License;
 
   const refreshProfile = async () => {
-    const updated = await fetchNui<Player | false>('fetchPlayerProfile', { id: profileId });
+    const updated = await fetchNui<PlayerProfile | false>('fetchPlayerProfile', { id: profileId });
     if (updated) setPlayer(updated);
   };
 
   useEffect(() => {
     setLoading(true);
-    fetchNui<Player | false>('fetchPlayerProfile', { id: initialPlayer.CitizenId ?? initialPlayer.License }, initialPlayer)
+    fetchNui<PlayerProfile | false>('fetchPlayerProfile', { id: initialPlayer.CitizenId ?? initialPlayer.License }, initialPlayer)
       .then((data) => {
         if (data && data.Name) setPlayer(data);
       })
@@ -139,214 +149,226 @@ const PlayerDetailView: React.FC<PlayerDetailViewProps> = ({ player: initialPlay
     { label: t('ui.pages.database.players.hardware_id'), value: player.HardwareId },
   ].filter((identifier) => identifier.value);
 
-  const vehicleColumns: Column<PlayerVehicle>[] = [
-    {
-      key: 'model',
-      header: t('ui.pages.database.vehicles.col_model'),
-      width: 'minmax(0,1.3fr)',
-      render: (v) => <span className="text-primary truncate capitalize">{v.model}</span>,
-    },
-    {
-      key: 'plate',
-      header: t('ui.pages.database.vehicles.plate'),
-      width: '110px',
-      render: (v) => <span className="font-mono text-sm px-1.5 py-0.5 rounded bg-white/5 border border-border/60">{v.plate}</span>,
-    },
-    {
-      key: 'garage',
-      header: t('ui.pages.database.vehicles.col_garage'),
-      width: 'minmax(0,1fr)',
-      render: (v) => <span className="text-muted truncate">{v.garage || '-'}</span>,
-    },
-    {
-      key: 'state',
-      header: t('ui.pages.database.vehicles.col_state'),
-      width: '100px',
-      render: (v) => <StatusDot tone={vehicleStateTone(v.state)} label={v.state} />,
-    },
-    {
-      key: 'fuel',
-      header: t('ui.pages.database.vehicles.fuel'),
-      width: '100px',
-      render: (v) => <Meter className="w-full" value={v.fuel ?? 0} />,
-    },
-  ];
+  const jobLabel = membershipLabel(job, t('ui.pages.database.jobs_gangs.unemployed'));
+  const gangLabel = membershipLabel(gang, t('ui.pages.database.players.no_gang'));
+  const citizenId = player.CitizenId || player.License;
 
-  const propertyColumns: Column<DetailProperty>[] = [
+  const summary = [
+    { key: 'cash', label: t('ui.pages.database.economy.cash'), value: formatMoney(money.cash) },
+    { key: 'bank', label: t('ui.pages.database.economy.bank'), value: formatMoney(money.bank) },
+    ...(money.crypto !== undefined
+      ? [{ key: 'crypto', label: t('ui.pages.database.players.crypto'), value: Number(money.crypto).toLocaleString() }]
+      : []),
     {
-      key: 'label',
-      header: t('ui.pages.database.properties.col_name'),
-      width: 'minmax(0,1.2fr)',
-      render: (p) => <span className="text-primary truncate">{p.label}</span>,
+      key: 'worth',
+      label: t('ui.pages.database.economy.net_worth'),
+      value: formatMoney((Number(money.cash) || 0) + (Number(money.bank) || 0)),
     },
-    {
-      key: 'address',
-      header: t('ui.pages.database.properties.col_address'),
-      width: 'minmax(0,1.5fr)',
-      render: (p) => <span className="text-muted truncate">{p.address}</span>,
-    },
-    {
-      key: 'type',
-      header: t('ui.pages.database.properties.asset_type'),
-      width: '110px',
-      render: (p) => <Badge>{p.type}</Badge>,
-    },
+    { key: 'vehicles', label: t('ui.pages.database.players.owned_vehicles'), value: String(vehicles.length) },
+    { key: 'properties', label: t('ui.pages.database.players.owned_properties'), value: String(properties.length) },
   ];
 
   return (
-    <div className="flex flex-col h-full gap-3 relative">
-      <div className="flex items-center gap-3 shrink-0">
-        <IconButton onClick={onBack} title={t('ui.pages.database.players.back')}>
-          <ArrowLeft size={16} />
-        </IconButton>
-        <div className="w-10 h-10 rounded-md bg-white/5 border border-border/60 flex items-center justify-center text-base font-semibold text-primary">
-          {(player.Name || '?')
-            .split(' ')
-            .map((word) => word[0])
-            .slice(0, 2)
-            .join('')
-            .toUpperCase()}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <h3 className="text-xl font-semibold text-primary truncate">{player.Name}</h3>
-            <StatusDot
-              tone={isOnline ? 'success' : 'default'}
-              label={isOnline ? t('ui.pages.database.players.online_now') : t('ui.pages.database.players.offline')}
-            />
-          </div>
-          <div className="flex items-center gap-1 text-sm text-muted font-mono">
-            {player.CitizenId || player.License}
-            <CopyButton text={player.CitizenId || player.License} size={11} />
-          </div>
-        </div>
-        {loading && <Loader2 size={16} className="animate-spin text-muted" />}
-      </div>
-
-      <div className="flex-1 min-h-0 flex gap-3">
-        <Panel className="w-[300px] shrink-0 overflow-y-auto custom-scrollbar p-4 space-y-5">
-          <Section title={t('ui.pages.database.players.basic_info')}>
-            <div>
-              <Field label={t('ui.pages.database.players.dob')}>{details?.dob || '-'}</Field>
-              <Field label={t('ui.pages.database.players.blood_group')}>{details?.bloodgroup || '-'}</Field>
-              <Field label={t('ui.pages.database.players.phone_number')}>
-                {details?.phone || '-'}
-                {details?.phone && <CopyButton text={details.phone} size={11} />}
-              </Field>
-              <Field label={t('ui.pages.database.players.job')}>
-                <span className="truncate">{membershipLabel(job, t('ui.pages.database.jobs_gangs.unemployed'))}</span>
-                <IconButton className="p-1" onClick={() => startAlignment('job')}>
-                  <Pencil size={11} />
-                </IconButton>
-              </Field>
-              <Field label={t('ui.pages.database.players.gang')}>
-                <span className="truncate">{membershipLabel(gang, t('ui.pages.database.players.no_gang'))}</span>
-                <IconButton className="p-1" onClick={() => startAlignment('gang')}>
-                  <Pencil size={11} />
-                </IconButton>
-              </Field>
-            </div>
-          </Section>
-
-          <Section title={t('ui.pages.database.players.money')}>
-            <div>
-              <Field label={t('ui.pages.database.economy.cash')}>
-                <span className="tabular-nums text-success">{formatMoney(money.cash)}</span>
-              </Field>
-              <Field label={t('ui.pages.database.economy.bank')}>
-                <span className="tabular-nums text-success">{formatMoney(money.bank)}</span>
-              </Field>
-              {money.crypto !== undefined && (
-                <Field label={t('ui.pages.database.players.crypto')}>
-                  <span className="tabular-nums">{money.crypto}</span>
-                </Field>
+    <div className="flex flex-col h-full gap-4 relative">
+      <Panel className="shrink-0 overflow-hidden">
+        <div className="flex items-center gap-4 px-5 py-4">
+          <IconButton className="p-2" onClick={onBack} title={t('ui.pages.database.players.back')}>
+            <ArrowLeft size={18} />
+          </IconButton>
+          <Avatar name={player.Name || '?'} src={player.AvatarUrl} online={isOnline} className="w-16 h-16 text-2xl" />
+          <div className="min-w-0 flex-1">
+            <h3 className="text-3xl font-semibold text-primary leading-tight truncate">{player.Name}</h3>
+            <div className="flex items-center gap-2.5 mt-1 text-lg text-primary/70 min-w-0">
+              <span className="flex items-center gap-1.5 shrink-0">
+                <StatusDot tone={isOnline ? 'success' : 'default'} />
+                {isOnline ? t('ui.pages.database.players.online_now') : t('ui.pages.database.players.offline')}
+              </span>
+              {isOnline && player.ServerId > 0 && (
+                <>
+                  <span className="text-primary/30">|</span>
+                  <span className="shrink-0">ID {player.ServerId}</span>
+                </>
               )}
+              <span className="text-primary/30">|</span>
+              <span className="flex items-center gap-1 font-mono text-base shrink-0">
+                {citizenId}
+                <CopyButton text={citizenId} size={12} />
+              </span>
+              <span className="text-primary/30">|</span>
+              <span className="truncate">{jobLabel}</span>
             </div>
-          </Section>
+          </div>
+          {loading && <Loader2 size={18} className="animate-spin text-primary/60" />}
+        </div>
 
-          <Section title={t('ui.pages.database.players.identifiers')}>
-            <div>
-              {identifiers.map((identifier) => (
-                <Field key={identifier.label} label={identifier.label} mono>
-                  <span className="truncate">{identifier.value}</span>
-                  <CopyButton text={identifier.value || ''} size={11} />
-                </Field>
-              ))}
-              {player.IP && (
-                <Field label={t('ui.pages.database.players.ip')} mono>
-                  <span className="truncate">{ipRevealed ? player.IP : '••••••••••'}</span>
-                  <IconButton className="p-1" onClick={() => setIpRevealed((value) => !value)}>
-                    {ipRevealed ? <EyeOff size={11} /> : <Eye size={11} />}
-                  </IconButton>
-                </Field>
-              )}
+        <div
+          className="grid border-t border-white/5 divide-x divide-white/5"
+          style={{ gridTemplateColumns: `repeat(${summary.length}, minmax(0, 1fr))` }}
+        >
+          {summary.map((item) => (
+            <div key={item.key} className="px-5 py-3 min-w-0">
+              <p className="text-base text-primary/60 truncate">{item.label}</p>
+              <p className="text-2xl font-semibold text-primary tabular-nums truncate mt-0.5">{item.value}</p>
             </div>
-          </Section>
+          ))}
+        </div>
+      </Panel>
+
+      <div className="flex-1 min-h-0 flex gap-4">
+        <Panel className="w-[360px] shrink-0 overflow-y-auto custom-scrollbar pb-3">
+          <GroupLabel>{t('ui.pages.database.players.basic_info')}</GroupLabel>
+          <Row label={t('ui.pages.database.players.dob')}>{details?.dob || '-'}</Row>
+          <Row label={t('ui.pages.database.players.blood_group')}>{details?.bloodgroup || '-'}</Row>
+          <Row label={t('ui.pages.database.players.phone_number')}>
+            {details?.phone || '-'}
+            {details?.phone && <CopyButton text={details.phone} size={13} />}
+          </Row>
+          <Row label={t('ui.pages.database.players.job')}>
+            <span className="truncate">{jobLabel}</span>
+            <IconButton className="p-1" title={t('ui.pages.database.players.change_job')} onClick={() => startAlignment('job')}>
+              <Pencil size={13} />
+            </IconButton>
+          </Row>
+          <Row label={t('ui.pages.database.players.gang')}>
+            <span className="truncate">{gangLabel}</span>
+            <IconButton className="p-1" title={t('ui.pages.database.players.change_gang')} onClick={() => startAlignment('gang')}>
+              <Pencil size={13} />
+            </IconButton>
+          </Row>
+
+          {isOnline && (
+            <>
+              <GroupLabel>{t('ui.pages.database.players.live_status')}</GroupLabel>
+              {player.Health !== undefined && (
+                <Row label={t('ui.pages.database.players.health')}>
+                  <Meter className="w-40" value={(player.Health / 200) * 100} />
+                </Row>
+              )}
+              {player.Armor !== undefined && (
+                <Row label={t('ui.pages.database.players.armor')}>
+                  <Meter className="w-40" value={player.Armor} />
+                </Row>
+              )}
+              {player.Ping !== undefined && (
+                <Row label={t('ui.pages.database.players.ping')}>
+                  <span className="tabular-nums">{player.Ping} ms</span>
+                </Row>
+              )}
+              <Row label={t('ui.pages.database.players.radio')}>
+                {player.Radio ? `${player.Radio} MHz` : t('ui.pages.database.players.radio_off')}
+              </Row>
+            </>
+          )}
+
+          <GroupLabel>{t('ui.pages.database.players.identifiers')}</GroupLabel>
+          {identifiers.map((identifier) => (
+            <Row key={identifier.label} label={identifier.label} mono>
+              <span className="truncate">{identifier.value}</span>
+              <CopyButton text={identifier.value || ''} size={13} />
+            </Row>
+          ))}
+          {player.IP && (
+            <Row label={t('ui.pages.database.players.ip')} mono>
+              <span className="truncate">{ipRevealed ? player.IP : '••••••••••'}</span>
+              <IconButton className="p-1" onClick={() => setIpRevealed((value) => !value)}>
+                {ipRevealed ? <EyeOff size={13} /> : <Eye size={13} />}
+              </IconButton>
+            </Row>
+          )}
+
+          {player.Note && (
+            <>
+              <GroupLabel>{t('ui.pages.database.players.staff_note')}</GroupLabel>
+              <p className="px-5 py-1 text-lg text-primary whitespace-pre-wrap break-words">{player.Note}</p>
+            </>
+          )}
         </Panel>
 
-        <Panel className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-border/60 shrink-0">
-            <Segmented
-              value={assetTab}
-              onChange={setAssetTab}
-              options={[
-                { id: 'vehicles', label: t('ui.pages.database.players.owned_vehicles'), count: vehicles.length },
-                { id: 'properties', label: t('ui.pages.database.players.owned_properties'), count: properties.length },
-                { id: 'inventory', label: t('ui.pages.database.players.player_inventory'), count: inventory.length },
-              ]}
-            />
-          </div>
-
-          {assetTab === 'vehicles' && (
-            <DataTable
-              className="flex-1"
-              columns={vehicleColumns}
-              rows={vehicles}
-              rowKey={(v) => v.plate}
-              onRowClick={openVehicle}
-              empty={<EmptyState icon={<Car size={28} />} title={t('ui.pages.database.players.no_vehicles_registered')} />}
-            />
-          )}
-
-          {assetTab === 'properties' && (
-            <DataTable
-              className="flex-1"
-              columns={propertyColumns}
-              rows={properties}
-              rowKey={(p) => String(p.id ?? p.label)}
-              empty={<EmptyState icon={<Home size={28} />} title={t('ui.pages.database.players.no_properties_owned')} />}
-            />
-          )}
-
-          {assetTab === 'inventory' && (
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-4">
-              {inventory.length === 0 ? (
-                <EmptyState icon={<Package size={28} />} title={t('ui.pages.database.inventory.empty_sector_desc')} />
-              ) : (
-                <div className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-2.5">
-                  {[...inventory]
-                    .sort((a, b) => a.slot - b.slot)
-                    .map((item) => (
-                      <div
-                        key={`${item.slot}-${item.name}`}
-                        className="flex flex-col rounded-md border border-border/50 bg-black/10 p-2.5"
-                        title={item.name}
-                      >
-                        <div className="flex justify-between text-[13px] text-muted tabular-nums">
-                          <span>#{item.slot}</span>
-                          <span className="text-primary">x{item.count}</span>
-                        </div>
-                        <div className="h-16 flex items-center justify-center">
-                          <InventoryItemImage item={item} className="w-14 h-14 object-contain" />
-                        </div>
-                        <p className="text-sm text-primary truncate">{item.label || item.name}</p>
-                      </div>
-                    ))}
+        <div className="flex-1 min-w-0 overflow-y-auto custom-scrollbar space-y-4 pr-1">
+          <Panel className="overflow-hidden">
+            <SectionTitle title={t('ui.pages.database.players.owned_vehicles')} count={vehicles.length} />
+            {vehicles.length === 0 ? (
+              <Empty>{t('ui.pages.database.players.no_vehicles_registered')}</Empty>
+            ) : (
+              <>
+                <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_120px_repeat(3,minmax(0,0.8fr))] gap-5 px-5 py-2.5 border-b border-white/5 text-base text-primary/60">
+                  <span>{t('ui.pages.database.vehicles.col_model')}</span>
+                  <span>{t('ui.pages.database.vehicles.col_garage')}</span>
+                  <span>{t('ui.pages.database.vehicles.col_state')}</span>
+                  <span>{t('ui.pages.database.vehicles.fuel')}</span>
+                  <span>{t('ui.pages.database.vehicles.engine')}</span>
+                  <span>{t('ui.pages.database.players.body')}</span>
                 </div>
-              )}
-            </div>
-          )}
-        </Panel>
+                {vehicles.map((v) => (
+                  <button
+                    key={v.plate}
+                    onClick={() => openVehicle(v)}
+                    className="w-full grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_120px_repeat(3,minmax(0,0.8fr))] items-center gap-5 px-5 py-3 border-b border-white/5 last:border-0 text-left transition-colors hover:bg-white/[0.03]"
+                  >
+                    <span className="flex items-center gap-3 min-w-0">
+                      <VehicleImage model={v.model} image={v.image} className="w-40 h-[86px] rounded-md" />
+                      <span className="min-w-0">
+                        <span className="block text-lg font-semibold text-primary capitalize truncate">{v.model}</span>
+                        <span className="block font-mono text-base text-primary/60 truncate">{v.plate}</span>
+                      </span>
+                    </span>
+                    <span className="text-lg text-primary truncate">{v.garage || '-'}</span>
+                    <span className="flex items-center gap-2 text-lg text-primary">
+                      <StatusDot tone={vehicleStateTone(v.state)} />
+                      {v.state}
+                    </span>
+                    <Meter value={v.fuel ?? 0} />
+                    <Meter value={(v.engine ?? 1000) / 10} />
+                    <Meter value={(v.body ?? 1000) / 10} />
+                  </button>
+                ))}
+              </>
+            )}
+          </Panel>
+
+          <Panel className="overflow-hidden">
+            <SectionTitle title={t('ui.pages.database.players.owned_properties')} count={properties.length} />
+            {properties.length === 0 ? (
+              <Empty>{t('ui.pages.database.players.no_properties_owned')}</Empty>
+            ) : (
+              properties.map((p) => (
+                <div
+                  key={String(p.id ?? p.label)}
+                  className="flex items-center justify-between gap-4 px-5 py-3 border-b border-white/5 last:border-0"
+                >
+                  <div className="min-w-0">
+                    <p className="text-lg font-semibold text-primary truncate">{p.label}</p>
+                    <p className="text-lg text-primary/60 truncate">{p.address}</p>
+                  </div>
+                  <span className="text-lg text-primary/70 capitalize shrink-0">{p.type}</span>
+                </div>
+              ))
+            )}
+          </Panel>
+
+          <Panel className="overflow-hidden">
+            <SectionTitle title={t('ui.pages.database.players.player_inventory')} count={inventory.length} />
+            {inventory.length === 0 ? (
+              <Empty>{t('ui.pages.database.inventory.empty_sector_desc')}</Empty>
+            ) : (
+              <div className="p-4 grid grid-cols-[repeat(auto-fill,minmax(120px,1fr))] gap-2.5">
+                {[...inventory]
+                  .sort((a, b) => a.slot - b.slot)
+                  .map((item) => (
+                    <div
+                      key={`${item.slot}-${item.name}`}
+                      className="flex flex-col items-center rounded-lg border border-white/5 bg-black/20 p-3"
+                      title={item.name}
+                    >
+                      <InventoryItemImage item={item} className="w-16 h-16 object-contain" />
+                      <p className="mt-2 w-full text-center text-lg text-primary truncate">{item.label || item.name}</p>
+                      <p className="text-base text-primary/60 tabular-nums">x{item.count}</p>
+                    </div>
+                  ))}
+              </div>
+            )}
+          </Panel>
+        </div>
       </div>
 
       {vehicle && (
@@ -372,6 +394,7 @@ const PlayerDetailView: React.FC<PlayerDetailViewProps> = ({ player: initialPlay
           }
         >
           <div className="space-y-4">
+            <VehicleImage model={vehicle.model} image={vehicle.image} className="w-full h-40 rounded-xl" />
             <div>
               <Field label={t('ui.pages.database.vehicles.engine')}>
                 <Meter className="w-32" value={(vehicle.engine ?? 1000) / 10} />
@@ -386,7 +409,7 @@ const PlayerDetailView: React.FC<PlayerDetailViewProps> = ({ player: initialPlay
             <div>
               <Label>{t('ui.pages.database.vehicles.set_status')}</Label>
               <Segmented
-                className="w-full"
+                fullWidth
                 value={vehicle.state as (typeof STATES)[number]}
                 onChange={(state) => state !== vehicle.state && vehicleAction('ChangeState', { NewState: state })}
                 options={STATES.map((state) => ({ id: state, label: state }))}
@@ -461,7 +484,7 @@ const PlayerDetailView: React.FC<PlayerDetailViewProps> = ({ player: initialPlay
             <div>
               <Label>{t('ui.pages.database.jobs_gangs.rank_grade')}</Label>
               {targetGrades.length > 0 ? (
-                <div className="border border-border/60 rounded-md max-h-56 overflow-y-auto custom-scrollbar">
+                <div className="border border-white/5 bg-black/20 rounded-lg max-h-56 overflow-y-auto custom-scrollbar">
                   {[...targetGrades]
                     .sort((a, b) => a.level - b.level)
                     .map((grade) => (
@@ -469,11 +492,11 @@ const PlayerDetailView: React.FC<PlayerDetailViewProps> = ({ player: initialPlay
                         key={grade.level}
                         onClick={() => setTarget({ ...target, grade: grade.level })}
                         className={cn(
-                          'w-full flex items-center gap-3 px-3 py-2 border-b border-border/30 last:border-0 text-left text-base',
-                          target.grade === grade.level ? 'bg-accent/10 text-primary' : 'text-muted hover:bg-white/[0.04]',
+                          'w-full flex items-center gap-3 px-3 py-2.5 border-b border-white/5 last:border-0 text-left text-base transition-colors',
+                          target.grade === grade.level ? 'bg-accent/10 text-primary' : 'text-primary/80 hover:bg-white/[0.04]',
                         )}
                       >
-                        <span className="w-6 tabular-nums text-sm">{grade.level}</span>
+                        <span className="w-6 tabular-nums text-base">{grade.level}</span>
                         <span className="flex-1 truncate">{grade.label}</span>
                         {target.grade === grade.level && <span className="w-1.5 h-1.5 rounded-full bg-accent" />}
                       </button>

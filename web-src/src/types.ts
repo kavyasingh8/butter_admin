@@ -114,6 +114,7 @@ export interface Player {
   Discord?: string;
   Fivem?: string;
   Xbox?: string;
+  AvatarUrl?: string;
   Details?: PlayerDetails;
   job?: FactionMembership | string;
   gang?: FactionMembership | string;

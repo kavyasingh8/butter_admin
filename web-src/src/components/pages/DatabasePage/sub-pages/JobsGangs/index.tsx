@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
-import { Briefcase, Pencil, Search, UserMinus, UserPlus, Users } from 'lucide-react';
+import { Briefcase, Pencil, Search, ShieldCheck, UserMinus, UserPlus, Users } from 'lucide-react';
 import { useAdminMenu, toArray } from '../../../../../providers/AdminMenuContext';
 import { Player, FactionMembership, Job } from '../../../../../types';
 import { fetchNui } from '../../../../../utils/fetchNui';
@@ -9,18 +9,21 @@ import { Select } from '../../../../ui/Select';
 import { CopyButton } from '../../../../ui/CopyButton';
 import { cn } from '../../../../../utils/cn';
 import {
+  Avatar,
+  Badge,
   Button,
   Column,
   DataTable,
   EmptyState,
   IconButton,
   Label,
+  ListHeader,
+  ListItem,
   Modal,
   Panel,
   PanelHeader,
   Segmented,
   StatStrip,
-  StatusDot,
   Toolbar,
   inputClass,
 } from '../../ui';
@@ -180,9 +183,9 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
       header: t('ui.pages.database.players.col_name'),
       width: 'minmax(0,1.5fr)',
       render: (p) => (
-        <span className="flex items-center gap-2.5 min-w-0">
-          <StatusDot tone={onlineIds.has(p.CitizenId) ? 'success' : 'default'} />
-          <span className="text-primary truncate">{p.Name}</span>
+        <span className="flex items-center gap-3 min-w-0">
+          <Avatar name={p.Name || '?'} online={onlineIds.has(p.CitizenId)} />
+          <span className="text-primary font-semibold truncate">{p.Name}</span>
         </span>
       ),
     },
@@ -192,7 +195,7 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
       width: 'minmax(0,1fr)',
       render: (p) => (
         <span className="flex items-center gap-1 min-w-0">
-          <span className="font-mono text-sm text-muted truncate">{p.CitizenId || '-'}</span>
+          <span className="font-mono text-sm text-primary/80 truncate">{p.CitizenId || '-'}</span>
           {p.CitizenId && <CopyButton text={p.CitizenId} size={11} className="opacity-0 group-hover:opacity-100" />}
         </span>
       ),
@@ -204,9 +207,11 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
       render: (p) => {
         const grade = gradeOf(p);
         return (
-          <span className="text-muted truncate">
-            {grade?.label ?? grade?.name ?? t('ui.pages.database.jobs_gangs.unknown')}
-            {grade?.level !== undefined && <span className="text-muted/60 ml-1.5 tabular-nums">({grade.level})</span>}
+          <span className="flex items-center gap-2 min-w-0">
+            {grade?.level !== undefined && <Badge tone="accent">{grade.level}</Badge>}
+            <span className="text-primary/80 truncate">
+              {grade?.label ?? grade?.name ?? t('ui.pages.database.jobs_gangs.unknown')}
+            </span>
           </span>
         );
       },
@@ -233,27 +238,27 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
     {
       key: 'level',
       header: t('ui.pages.database.jobs_gangs.level_header'),
-      width: '64px',
-      render: (g) => <span className="tabular-nums text-muted">{g.level}</span>,
+      width: '80px',
+      render: (g) => <Badge tone="accent">{g.level}</Badge>,
     },
     {
       key: 'label',
       header: t('ui.pages.database.jobs_gangs.grade_label'),
       width: 'minmax(0,1.5fr)',
-      render: (g) => <span className="text-primary truncate">{g.label}</span>,
+      render: (g) => <span className="text-primary font-semibold truncate">{g.label}</span>,
     },
     {
       key: 'name',
       header: t('ui.pages.database.jobs_gangs.grade_name'),
       width: 'minmax(0,1fr)',
-      render: (g) => <span className="font-mono text-sm text-muted truncate">{g.name}</span>,
+      render: (g) => <span className="font-mono text-sm text-primary/80 truncate">{g.name}</span>,
     },
     {
       key: 'assigned',
       header: t('ui.pages.database.jobs_gangs.assigned_header'),
-      width: '90px',
+      width: '110px',
       align: 'right',
-      render: (g) => <span className="tabular-nums">{gradeCounts[g.level] ?? 0}</span>,
+      render: (g) => <span className="tabular-nums font-semibold">{gradeCounts[g.level] ?? 0}</span>,
     },
   ];
 
@@ -261,9 +266,23 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
     <div className="flex flex-col h-full gap-3">
       <StatStrip
         items={[
-          { label: t('ui.pages.database.jobs_gangs.registered_units'), value: groups.length },
-          { label: t('ui.pages.database.jobs_gangs.active_personnel'), value: totalMembers.toLocaleString() },
-          { label: t('ui.pages.database.jobs_gangs.admin_oversight'), value: admins?.length || 0 },
+          {
+            label: t('ui.pages.database.jobs_gangs.registered_units'),
+            value: groups.length,
+            icon: <Briefcase size={18} />,
+          },
+          {
+            label: t('ui.pages.database.jobs_gangs.active_personnel'),
+            value: totalMembers.toLocaleString(),
+            icon: <Users size={18} />,
+            tone: 'success',
+          },
+          {
+            label: t('ui.pages.database.jobs_gangs.admin_oversight'),
+            value: admins?.length || 0,
+            icon: <ShieldCheck size={18} />,
+            tone: 'warning',
+          },
         ]}
       />
 
@@ -293,36 +312,35 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
       </Toolbar>
 
       <div className="flex-1 min-h-0 flex gap-3">
-        <Panel className="w-[260px] shrink-0 flex flex-col overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2 border-b border-border/60 text-[13px] text-muted font-medium">
-            <span>{category === 'Jobs' ? t('ui.pages.database.jobs_gangs.jobs_tab') : t('ui.pages.database.jobs_gangs.gangs_tab')}</span>
-            <span>{t('ui.pages.database.jobs_gangs.members')}</span>
-          </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
+        <Panel className="w-[280px] shrink-0 flex flex-col overflow-hidden">
+          <ListHeader
+            left={category === 'Jobs' ? t('ui.pages.database.jobs_gangs.jobs_tab') : t('ui.pages.database.jobs_gangs.gangs_tab')}
+            right={<span>{t('ui.pages.database.jobs_gangs.members')}</span>}
+          />
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
             {visibleGroups.length === 0 ? (
-              <EmptyState title={t('ui.pages.database.jobs_gangs.no_entries_found')} />
+              <EmptyState icon={<Briefcase size={40} />} title={t('ui.pages.database.jobs_gangs.no_entries_found')} />
             ) : (
-              visibleGroups.map((group) => {
-                const active = selected?.id === group.id;
-                return (
-                  <button
-                    key={group.id}
-                    onClick={() => setSelectedId(group.id)}
-                    className={cn(
-                      'w-full flex items-center gap-3 px-4 py-2.5 border-b border-border/30 text-left transition-colors',
-                      active ? 'bg-accent/10 shadow-[inset_2px_0_0_rgb(var(--accent))]' : 'hover:bg-white/[0.03]',
-                    )}
-                  >
-                    <span className="flex-1 min-w-0">
-                      <span className="block text-base text-primary truncate">{group.label}</span>
-                      <span className="block font-mono text-[13px] text-muted truncate">{group.id}</span>
-                    </span>
-                    <span className={cn('text-sm tabular-nums', group.totalPlayers ? 'text-primary' : 'text-muted/60')}>
+              visibleGroups.map((group) => (
+                <ListItem
+                  key={group.id}
+                  active={selected?.id === group.id}
+                  onClick={() => setSelectedId(group.id)}
+                  media={<Avatar name={group.label || group.id} />}
+                  title={group.label}
+                  subtitle={group.id}
+                  right={
+                    <span
+                      className={cn(
+                        'min-w-[28px] px-1.5 py-1 rounded-md text-center font-mono text-[13px] font-bold tabular-nums',
+                        group.totalPlayers ? 'bg-accent/10 text-accent' : 'bg-white/5 text-primary/80',
+                      )}
+                    >
                       {group.totalPlayers || 0}
                     </span>
-                  </button>
-                );
-              })
+                  }
+                />
+              ))
             )}
           </div>
         </Panel>
@@ -331,6 +349,7 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
           {selected ? (
             <>
               <PanelHeader
+                media={<Avatar name={selected.label || selected.id} className="w-10 h-10 text-base" />}
                 title={selected.label}
                 subtitle={
                   <span className="font-mono">
@@ -354,7 +373,7 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
               />
               {detailTab === 'Members' ? (
                 <>
-                  <Toolbar className="px-4 py-2.5 border-b border-border/60">
+                  <Toolbar className="px-4 py-3 border-b border-white/5">
                     <SearchField
                       className="flex-1 max-w-xs"
                       value={rosterSearch}
@@ -381,7 +400,7 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
                     loading={loadingRoster}
                     empty={
                       <EmptyState
-                        icon={<Users size={28} />}
+                        icon={<Users size={40} />}
                         title={
                           rosterSearch
                             ? t('ui.pages.database.jobs_gangs.no_players_found')
@@ -404,7 +423,7 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
           ) : (
             <EmptyState
               className="flex-1"
-              icon={<Briefcase size={28} />}
+              icon={<Briefcase size={40} />}
               title={t('ui.pages.database.jobs_gangs.registry_intelligence')}
               hint={t('ui.pages.database.jobs_gangs.select_group_desc')}
             />
@@ -425,7 +444,7 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
             onChange={setPickerSearch}
             placeholder={t('ui.pages.database.jobs_gangs.search_placeholder')}
           />
-          <div className="mt-3 border border-border/60 rounded-md max-h-80 overflow-y-auto custom-scrollbar">
+          <div className="mt-3 border border-white/5 bg-black/20 rounded-lg max-h-80 overflow-y-auto custom-scrollbar">
             {pickerPlayers.length === 0 ? (
               <EmptyState icon={<Search size={22} />} title={t('ui.pages.database.jobs_gangs.no_players_found')} />
             ) : (
@@ -439,14 +458,14 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
                       setPickerOpen(false);
                       if (selected) startEdit(p, selected.id);
                     }}
-                    className="w-full flex items-center gap-3 px-3 py-2 border-b border-border/30 last:border-0 text-left hover:bg-white/[0.04]"
+                    className="w-full flex items-center gap-3 px-3 py-2.5 border-b border-white/5 last:border-0 text-left hover:bg-white/[0.04] transition-colors"
                   >
-                    <StatusDot tone={onlineIds.has(p.CitizenId) ? 'success' : 'default'} />
+                    <Avatar name={p.Name || '?'} online={onlineIds.has(p.CitizenId)} />
                     <span className="flex-1 min-w-0">
-                      <span className="block text-base text-primary truncate">{p.Name}</span>
-                      <span className="block font-mono text-[13px] text-muted truncate">{p.CitizenId}</span>
+                      <span className="block text-base font-semibold text-primary truncate">{p.Name}</span>
+                      <span className="block font-mono text-[13px] text-primary/80 truncate">{p.CitizenId}</span>
                     </span>
-                    <span className="text-sm text-muted truncate max-w-[40%]">
+                    <span className="text-sm text-primary/80 truncate max-w-[40%]">
                       {current || t('ui.pages.database.jobs_gangs.unemployed')}
                     </span>
                   </button>
@@ -486,7 +505,7 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
             <div>
               <Label>{t('ui.pages.database.jobs_gangs.rank_grade')}</Label>
               {targetGrades.length > 0 ? (
-                <div className="border border-border/60 rounded-md max-h-56 overflow-y-auto custom-scrollbar">
+                <div className="border border-white/5 bg-black/20 rounded-lg max-h-56 overflow-y-auto custom-scrollbar">
                   {[...targetGrades]
                     .sort((a, b) => a.level - b.level)
                     .map((grade) => (
@@ -494,11 +513,11 @@ const JobsGangs: React.FC<JobsGangsProps> = ({ searchQuery }) => {
                         key={grade.level}
                         onClick={() => setTarget({ ...target, grade: grade.level })}
                         className={cn(
-                          'w-full flex items-center gap-3 px-3 py-2 border-b border-border/30 last:border-0 text-left text-base',
-                          target.grade === grade.level ? 'bg-accent/10 text-primary' : 'text-muted hover:bg-white/[0.04]',
+                          'w-full flex items-center gap-3 px-3 py-2.5 border-b border-white/5 last:border-0 text-left text-base transition-colors',
+                          target.grade === grade.level ? 'bg-accent/10 text-primary' : 'text-primary/80 hover:bg-white/[0.04]',
                         )}
                       >
-                        <span className="w-6 tabular-nums text-sm">{grade.level}</span>
+                        <span className="w-6 tabular-nums text-base">{grade.level}</span>
                         <span className="flex-1 truncate">{grade.label}</span>
                         {target.grade === grade.level && <span className="w-1.5 h-1.5 rounded-full bg-accent" />}
                       </button>

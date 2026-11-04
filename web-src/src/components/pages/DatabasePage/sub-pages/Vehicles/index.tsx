@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Car, Check, Trash2 } from 'lucide-react';
+import { Car, Check, Lock, MapPin, Trash2, Warehouse } from 'lucide-react';
 import { useAdminMenu } from '../../../../../providers/AdminMenuContext';
 import { fetchNui } from '../../../../../utils/fetchNui';
 import { PlayerVehicle } from '../../../../../types';
@@ -16,12 +16,14 @@ import {
   Meter,
   Panel,
   PanelHeader,
+  Plate,
   Section,
   Segmented,
   StatStrip,
   StatusDot,
   Tone,
   Toolbar,
+  VehicleImage,
   inputClass,
 } from '../../ui';
 
@@ -136,37 +138,42 @@ const Vehicles: React.FC<VehiclesProps> = ({ searchQuery }) => {
     {
       key: 'model',
       header: t('ui.pages.database.vehicles.col_model'),
-      width: 'minmax(0,1.4fr)',
-      render: (v) => <span className="text-primary truncate capitalize">{v.model}</span>,
+      width: 'minmax(0,1.6fr)',
+      render: (v) => (
+        <span className="flex items-center gap-3 min-w-0">
+          <VehicleImage model={v.model} image={v.image} />
+          <span className="text-primary font-semibold truncate capitalize">{v.model}</span>
+        </span>
+      ),
     },
     {
       key: 'plate',
       header: t('ui.pages.database.vehicles.plate'),
-      width: '110px',
-      render: (v) => <span className="font-mono text-sm px-1.5 py-0.5 rounded bg-white/5 border border-border/60">{v.plate}</span>,
+      width: '130px',
+      render: (v) => <Plate plate={v.plate} />,
     },
     {
       key: 'owner',
       header: t('ui.pages.database.vehicles.col_owner'),
       width: 'minmax(0,1fr)',
-      render: (v) => <span className="font-mono text-sm text-muted truncate">{v.owner || '-'}</span>,
+      render: (v) => <span className="font-mono text-sm text-primary/80 truncate">{v.owner || '-'}</span>,
     },
     {
       key: 'garage',
       header: t('ui.pages.database.vehicles.col_garage'),
       width: 'minmax(0,1fr)',
-      render: (v) => <span className="text-muted truncate">{v.garage || '-'}</span>,
+      render: (v) => <span className="text-primary/80 truncate">{v.garage || '-'}</span>,
     },
     {
       key: 'state',
       header: t('ui.pages.database.vehicles.col_state'),
-      width: '100px',
+      width: '130px',
       render: (v) => <StatusDot tone={vehicleStateTone(v.state)} label={stateLabel(v.state)} />,
     },
     {
       key: 'fuel',
       header: t('ui.pages.database.vehicles.fuel'),
-      width: '110px',
+      width: '130px',
       render: (v) => <Meter className="w-full" value={v.fuel ?? 0} />,
     },
   ];
@@ -178,10 +185,26 @@ const Vehicles: React.FC<VehiclesProps> = ({ searchQuery }) => {
           {
             label: t('ui.pages.database.vehicles.total_vehicles'),
             value: STATES.reduce((sum, state) => sum + (vehicleStateCounts[state] ?? 0), 0).toLocaleString(),
+            icon: <Car size={18} />,
           },
-          { label: t('ui.pages.database.vehicles.state_stored'), value: vehicleStateCounts.Stored ?? 0, tone: 'success' },
-          { label: t('ui.pages.database.vehicles.state_out'), value: vehicleStateCounts.Out ?? 0, tone: 'warning' },
-          { label: t('ui.pages.database.vehicles.impounded'), value: vehicleStateCounts.Impounded ?? 0, tone: 'danger' },
+          {
+            label: t('ui.pages.database.vehicles.state_stored'),
+            value: vehicleStateCounts.Stored ?? 0,
+            icon: <Warehouse size={18} />,
+            tone: 'success',
+          },
+          {
+            label: t('ui.pages.database.vehicles.state_out'),
+            value: vehicleStateCounts.Out ?? 0,
+            icon: <MapPin size={18} />,
+            tone: 'warning',
+          },
+          {
+            label: t('ui.pages.database.vehicles.impounded'),
+            value: vehicleStateCounts.Impounded ?? 0,
+            icon: <Lock size={18} />,
+            tone: 'danger',
+          },
         ]}
       />
 
@@ -194,7 +217,7 @@ const Vehicles: React.FC<VehiclesProps> = ({ searchQuery }) => {
             ...STATES.map((state) => ({ id: state, label: stateLabel(state), count: vehicleStateCounts[state] })),
           ]}
         />
-        <span className="ml-auto text-sm text-muted">
+        <span className="ml-auto font-mono text-[13px] text-primary/80">
           {t('ui.pages.database.result_count', vehiclesTotal.toLocaleString())}
         </span>
       </Toolbar>
@@ -209,10 +232,10 @@ const Vehicles: React.FC<VehiclesProps> = ({ searchQuery }) => {
             onRowClick={(v) => select(selected?.plate === v.plate ? null : v)}
             selectedKey={selected?.plate}
             loading={loading}
-            empty={<EmptyState icon={<Car size={28} />} title={t('ui.pages.database.vehicles.no_results')} />}
+            empty={<EmptyState icon={<Car size={40} />} title={t('ui.pages.database.vehicles.no_results')} />}
           />
           {vehiclesTotal > ITEMS_PER_PAGE && (
-            <div className="px-4 py-2 border-t border-border/60">
+            <div className="px-4 py-2 border-t border-white/5">
               <Pagination
                 currentPage={currentPage}
                 totalItems={vehiclesTotal}
@@ -225,7 +248,7 @@ const Vehicles: React.FC<VehiclesProps> = ({ searchQuery }) => {
         </Panel>
 
         {selected && (
-          <Panel className="w-[300px] shrink-0 flex flex-col overflow-hidden animate-in slide-in-from-right-2 duration-200">
+          <Panel className="w-[320px] shrink-0 flex flex-col overflow-hidden animate-in slide-in-from-right-2 duration-200">
             <PanelHeader
               title={<span className="capitalize">{selected.model}</span>}
               subtitle={
@@ -237,6 +260,15 @@ const Vehicles: React.FC<VehiclesProps> = ({ searchQuery }) => {
               onClose={() => select(null)}
             />
             <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-5">
+              <div className="relative">
+                <VehicleImage model={selected.model} image={selected.image} className="w-full h-36 rounded-xl" />
+                <StatusDot
+                  className="absolute top-2 left-2"
+                  tone={vehicleStateTone(selected.state)}
+                  label={stateLabel(selected.state)}
+                />
+              </div>
+
               <Section title={t('ui.pages.database.vehicles.vehicle_info')}>
                 <div>
                   <Field label={t('ui.pages.database.vehicles.col_owner')} mono>
@@ -250,12 +282,17 @@ const Vehicles: React.FC<VehiclesProps> = ({ searchQuery }) => {
                   <Field label={t('ui.pages.database.vehicles.engine')}>
                     <Meter className="w-28" value={(selected.engine ?? 0) / 10} />
                   </Field>
+                  {selected.body !== undefined && (
+                    <Field label={t('ui.pages.database.players.body')}>
+                      <Meter className="w-28" value={selected.body / 10} />
+                    </Field>
+                  )}
                 </div>
               </Section>
 
               <Section title={t('ui.pages.database.vehicles.set_status')}>
                 <Segmented
-                  className="w-full"
+                  fullWidth
                   value={selected.state as (typeof STATES)[number]}
                   onChange={(state) => state !== selected.state && handleAction('ChangeState', { NewState: state })}
                   options={STATES.map((state) => ({ id: state, label: stateLabel(state) }))}
@@ -304,7 +341,7 @@ const Vehicles: React.FC<VehiclesProps> = ({ searchQuery }) => {
               </div>
             </div>
 
-            <div className="p-4 border-t border-border/60">
+            <div className="p-4 border-t border-white/5">
               {confirmDelete ? (
                 <div className="flex gap-2">
                   <Button variant="ghost" className="flex-1" onClick={() => setConfirmDelete(false)}>

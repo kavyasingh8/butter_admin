@@ -106,10 +106,11 @@ MySQL.ready(function()
         ranks[row.id:lower()] = { Id = row.id, Name = row.name, Permissions = DecodeJson(row.permissions, {}) }
     end
 
-    local staffRows = MySQL.query.await('SELECT identifier, rank_id, is_temp, expires, webhook, webhook_events, duty_seconds FROM admin_staff') or {}
+    local staffRows = MySQL.query.await('SELECT identifier, name, rank_id, is_temp, expires, webhook, webhook_events, duty_seconds FROM admin_staff') or {}
     for _, row in ipairs(staffRows) do
         admins[row.identifier] = {
             Identifier = row.identifier,
+            Name = row.name,
             RankId = row.rank_id,
             IsTemp = row.is_temp == 1 or row.is_temp == true,
             Expires = tonumber(row.expires),
@@ -400,6 +401,7 @@ local function buildAdminRow(admin, onlineIndex)
     local identifier = admin.Identifier
     local row = {
         Identifier = identifier,
+        Name = admin.Name,
         RankId = admin.RankId,
         IsTemp = admin.IsTemp,
         Expires = admin.Expires,
@@ -669,17 +671,19 @@ RegisterNetEvent('butter_admin:server:saveAdmin', function(data)
     if isTemp and not expires then return Notify(source, locale('access.invalid_expiry'), 'error') end
 
     local webhookEvents = validateWebhookEvents(data.WebhookEvents)
+    local name = SanitizeString(data.Name, 64)
 
     local function save(webhook)
         local ok = MySQL.update.await([[
-            INSERT INTO admin_staff (identifier, rank_id, is_temp, expires, webhook, webhook_events) VALUES (?, ?, ?, ?, ?, ?)
-            ON DUPLICATE KEY UPDATE rank_id = VALUES(rank_id), is_temp = VALUES(is_temp), expires = VALUES(expires),
+            INSERT INTO admin_staff (identifier, name, rank_id, is_temp, expires, webhook, webhook_events) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE name = VALUES(name), rank_id = VALUES(rank_id), is_temp = VALUES(is_temp), expires = VALUES(expires),
                 webhook = VALUES(webhook), webhook_events = VALUES(webhook_events)
-        ]], { identifier, data.RankId, isTemp and 1 or 0, expires, webhook, json.encode(webhookEvents) })
+        ]], { identifier, name, data.RankId, isTemp and 1 or 0, expires, webhook, json.encode(webhookEvents) })
         if not ok then return Notify(source, locale('access.save_failed'), 'error') end
 
         admins[identifier] = {
             Identifier = identifier,
+            Name = name,
             RankId = data.RankId,
             IsTemp = isTemp,
             Expires = expires,
@@ -695,7 +699,7 @@ RegisterNetEvent('butter_admin:server:saveAdmin', function(data)
     if existing?.Webhook then return save(existing.Webhook) end -- editing must not create another channel
     if not Config.AutoCreateAdminWebhooks then return save(nil) end
 
-    CreateAdminWebhookChannel(SanitizeString(data.Name, 64) or identifier, save)
+    CreateAdminWebhookChannel(name or identifier, save)
 end)
 
 RegisterNetEvent('butter_admin:server:deleteAdmin', function(identifier)

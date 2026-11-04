@@ -184,6 +184,20 @@ local function getPlayerNote(citizenId, license)
     return row?.note or ''
 end
 
+local function noop() end
+
+--- Avatars are fetched in the background, so a profile's first open may not have one yet.
+---@param discord string?
+---@param steam string?
+---@return string?
+local function getProfileAvatar(discord, steam)
+    local profile = discord and discord ~= '' and discord ~= 'Not Linked' and GetDiscordProfile(discord, noop)
+    if not profile and steam and steam ~= '' and steam ~= 'Not Linked' then
+        profile = GetSteamProfile(steam, noop)
+    end
+    return profile and profile.avatar
+end
+
 lib.callback.register('butter_admin:server:getPlayerProfile', function(source, data)
     -- Both the player list and the database browser open player profiles.
     if not IsAuthorizedAny(source, { 'page.playerlist', 'page.database' }) then return nil end
@@ -241,14 +255,18 @@ lib.callback.register('butter_admin:server:getPlayerProfile', function(source, d
         radio = getRadioChannel(onlineSource)
     end
 
+    local steam = onlineSource and GetIdentifier(onlineSource, 'steam') or row.steam or 'Not Linked'
+    local discord = onlineSource and GetIdentifier(onlineSource, 'discord') or row.discord or 'Not Linked'
+
     return {
         Name = player.name,
         CharName = player.name,
         ServerId = onlineSource or 0,
         CitizenId = citizenId,
-        Steam = onlineSource and GetIdentifier(onlineSource, 'steam') or row.steam or 'Not Linked',
+        Steam = steam,
         License = license,
-        Discord = onlineSource and GetIdentifier(onlineSource, 'discord') or row.discord or 'Not Linked',
+        Discord = discord,
+        AvatarUrl = getProfileAvatar(discord, steam),
         HardwareId = onlineSource and GetIdentifier(onlineSource, 'license2') or row.license2 or 'N/A',
         IP = onlineSource and GetPlayerEndpoint(onlineSource) or 'N/A',
         Details = details,

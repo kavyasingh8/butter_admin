@@ -365,7 +365,7 @@ export const MOCK_RANKS: Rank[] = [
       'commands.resources',
     ],
   },
-  { Id: 'superadmin', Name: 'Super Admin', Permissions: ['*'] },
+  { Id: 'superadmin', Name: 'Super Admin', Permissions: ['all'] },
 ];
 
 export const MOCK_ADMINS: AdminUser[] = [

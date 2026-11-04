@@ -1,21 +1,25 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Car, Warehouse } from 'lucide-react';
+import { Car, Lock, Warehouse } from 'lucide-react';
 import { useAdminMenu } from '../../../../../providers/AdminMenuContext';
 import { SortSelect } from '../../../../ui/SortSelect';
 import { CopyButton } from '../../../../ui/CopyButton';
-import { cn } from '../../../../../utils/cn';
 import { vehicleStateTone } from '../Vehicles';
 import {
   Column,
   DataTable,
   EmptyState,
+  IconTile,
+  ListHeader,
+  ListItem,
   Meter,
   Panel,
   PanelHeader,
+  Plate,
   Segmented,
   StatStrip,
   StatusDot,
   Toolbar,
+  VehicleImage,
 } from '../../ui';
 
 type GarageFilter = 'all' | 'impounded' | 'empty';
@@ -28,6 +32,7 @@ interface GarageVehicle {
   state: string;
   fuel?: number;
   engine?: number;
+  image?: string;
 }
 
 interface GaragesProps {
@@ -78,16 +83,21 @@ const Garages: React.FC<GaragesProps> = ({ searchQuery }) => {
     {
       key: 'model',
       header: t('ui.pages.database.vehicles.col_model'),
-      width: 'minmax(0,1.3fr)',
-      render: (v) => <span className="text-primary truncate capitalize">{v.model}</span>,
+      width: 'minmax(0,1.6fr)',
+      render: (v) => (
+        <span className="flex items-center gap-3 min-w-0">
+          <VehicleImage model={v.model} image={v.image} />
+          <span className="text-primary font-semibold truncate capitalize">{v.model}</span>
+        </span>
+      ),
     },
     {
       key: 'plate',
       header: t('ui.pages.database.garages.plate'),
-      width: '130px',
+      width: '150px',
       render: (v) => (
         <span className="flex items-center gap-1">
-          <span className="font-mono text-sm px-1.5 py-0.5 rounded bg-white/5 border border-border/60">{v.plate}</span>
+          <Plate plate={v.plate} />
           <CopyButton text={v.plate} size={11} className="opacity-0 group-hover:opacity-100" />
         </span>
       ),
@@ -96,24 +106,24 @@ const Garages: React.FC<GaragesProps> = ({ searchQuery }) => {
       key: 'owner',
       header: t('ui.pages.database.garages.owner_cid'),
       width: 'minmax(0,1fr)',
-      render: (v) => <span className="font-mono text-sm text-muted truncate">{v.owner || '-'}</span>,
+      render: (v) => <span className="font-mono text-sm text-primary/80 truncate">{v.owner || '-'}</span>,
     },
     {
       key: 'state',
       header: t('ui.pages.database.vehicles.col_state'),
-      width: '100px',
+      width: '130px',
       render: (v) => <StatusDot tone={vehicleStateTone(v.state)} label={v.state} />,
     },
     {
       key: 'fuel',
       header: t('ui.pages.database.vehicles.fuel'),
-      width: '100px',
+      width: '120px',
       render: (v) => <Meter className="w-full" value={v.fuel ?? 0} />,
     },
     {
       key: 'engine',
       header: t('ui.pages.database.vehicles.engine'),
-      width: '100px',
+      width: '120px',
       render: (v) => <Meter className="w-full" value={(v.engine ?? 0) / 10} />,
     },
   ];
@@ -122,9 +132,14 @@ const Garages: React.FC<GaragesProps> = ({ searchQuery }) => {
     <div className="flex flex-col h-full gap-3">
       <StatStrip
         items={[
-          { label: t('ui.pages.database.garages.total_garages'), value: garages.length },
-          { label: t('ui.pages.database.garages.total_vehicles'), value: totalVehicles.toLocaleString() },
-          { label: t('ui.pages.database.garages.impounded'), value: impounded, tone: 'danger' },
+          { label: t('ui.pages.database.garages.total_garages'), value: garages.length, icon: <Warehouse size={18} /> },
+          {
+            label: t('ui.pages.database.garages.total_vehicles'),
+            value: totalVehicles.toLocaleString(),
+            icon: <Car size={18} />,
+            tone: 'success',
+          },
+          { label: t('ui.pages.database.garages.impounded'), value: impounded, icon: <Lock size={18} />, tone: 'danger' },
         ]}
       />
 
@@ -149,31 +164,29 @@ const Garages: React.FC<GaragesProps> = ({ searchQuery }) => {
       </Toolbar>
 
       <div className="flex-1 min-h-0 flex gap-3">
-        <Panel className="w-[260px] shrink-0 flex flex-col overflow-hidden">
-          <div className="px-4 py-2 border-b border-border/60 text-[13px] text-muted font-medium">
-            {t('ui.pages.database.garages.registered')} ({visibleGarages.length})
-          </div>
-          <div className="flex-1 overflow-y-auto custom-scrollbar">
+        <Panel className="w-[280px] shrink-0 flex flex-col overflow-hidden">
+          <ListHeader left={t('ui.pages.database.garages.registered')} right={<span>{visibleGarages.length}</span>} />
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
             {visibleGarages.length === 0 ? (
-              <EmptyState title={t('ui.pages.database.garages.no_results')} />
+              <EmptyState icon={<Warehouse size={40} />} title={t('ui.pages.database.garages.no_results')} />
             ) : (
               visibleGarages.map((garage) => {
                 const impoundedHere = garage.Vehicles.filter((v) => v.state === 'Impounded').length;
                 const active = selected?.Name === garage.Name;
                 return (
-                  <button
+                  <ListItem
                     key={garage.Name}
+                    active={active}
                     onClick={() => setSelectedName(garage.Name)}
-                    className={cn(
-                      'w-full flex items-center gap-3 px-4 py-2.5 border-b border-border/30 text-left transition-colors',
-                      active ? 'bg-accent/10 shadow-[inset_2px_0_0_rgb(var(--accent))]' : 'hover:bg-white/[0.03]',
-                    )}
-                  >
-                    <Warehouse size={14} className={active ? 'text-accent' : 'text-muted'} />
-                    <span className="flex-1 min-w-0 text-base text-primary truncate">{garage.Name}</span>
-                    {impoundedHere > 0 && <span className="text-[13px] text-danger tabular-nums">{impoundedHere}</span>}
-                    <span className="text-sm text-muted tabular-nums">{garage.Vehicles.length}</span>
-                  </button>
+                    media={
+                      <IconTile tone={active ? 'accent' : 'default'} className="w-9 h-9 rounded-lg">
+                        <Warehouse size={15} />
+                      </IconTile>
+                    }
+                    title={garage.Name}
+                    subtitle={t('ui.pages.database.garages.registered_vehicles', String(garage.Vehicles.length))}
+                    right={impoundedHere > 0 && <StatusDot tone="danger" label={impoundedHere} />}
+                  />
                 );
               })
             )}
@@ -184,6 +197,11 @@ const Garages: React.FC<GaragesProps> = ({ searchQuery }) => {
           {selected ? (
             <>
               <PanelHeader
+                media={
+                  <IconTile className="w-10 h-10">
+                    <Warehouse size={18} />
+                  </IconTile>
+                }
                 title={selected.Name}
                 subtitle={t('ui.pages.database.garages.registered_vehicles', String(selected.Vehicles.length))}
               />
@@ -192,11 +210,11 @@ const Garages: React.FC<GaragesProps> = ({ searchQuery }) => {
                 columns={columns}
                 rows={selected.Vehicles}
                 rowKey={(v) => v.plate}
-                empty={<EmptyState icon={<Car size={28} />} title={t('ui.pages.database.garages.no_vehicles')} />}
+                empty={<EmptyState icon={<Car size={40} />} title={t('ui.pages.database.garages.no_vehicles')} />}
               />
             </>
           ) : (
-            <EmptyState className="flex-1" icon={<Warehouse size={28} />} title={t('ui.pages.database.garages.no_results')} />
+            <EmptyState className="flex-1" icon={<Warehouse size={40} />} title={t('ui.pages.database.garages.no_results')} />
           )}
         </Panel>
       </div>

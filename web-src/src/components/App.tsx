@@ -178,8 +178,9 @@ const App: React.FC = () => {
           className="flex"
           style={{
             // Opacity and transform only, so the transition stays cheap on the zoomed subtree.
+            // will-change skips transform: Chromium would keep the 0.97-scale raster and blur the menu.
             transition: 'opacity 140ms cubic-bezier(0.16,1,0.3,1), transform 140ms cubic-bezier(0.16,1,0.3,1)',
-            willChange: 'opacity, transform',
+            willChange: 'opacity',
             opacity: menuVisible ? 1 : 0,
             transform: menuVisible ? 'scale(1)' : 'scale(0.97)',
             width: isLarge ? '98vw' : '90vw',

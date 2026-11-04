@@ -1,9 +1,59 @@
-import React, { useState, useEffect } from 'react';
-import { SearchField } from '../../ui/SearchField';
+import React, { useEffect, useState } from 'react';
+import {
+  CalendarClock,
+  Check,
+  ClipboardPaste,
+  Copy,
+  ExternalLink,
+  Fingerprint,
+  Hourglass,
+  IdCard,
+  Infinity as InfinityIcon,
+  ChevronRight,
+  KeyRound,
+  Layers,
+  Lock,
+  LockOpen,
+  Pencil,
+  Plus,
+  Timer,
+  Trash2,
+  TriangleAlert,
+  UserPlus,
+  UserRound,
+  UsersRound,
+  Webhook,
+  type LucideIcon,
+} from 'lucide-react';
+import { WEBHOOK_EVENT_ICONS, categoryIcon, permissionIcon, rankIcon } from './icons';
 import { useAdminMenu, toArray } from '../../../providers/AdminMenuContext';
-import { SubTabs } from '../../ui/SubTabs';
-import { Select } from '../../ui/Select';
 import { Rank, AdminUser, DiscordRole, Character, PermissionCategory } from '../../../types';
+import { fetchNui } from '../../../utils/fetchNui';
+import { openExternalUrl } from '../../../utils/misc';
+import { cn } from '../../../utils/cn';
+import { SearchField } from '../../ui/SearchField';
+import { Select } from '../../ui/Select';
+import { CopyButton } from '../../ui/CopyButton';
+import { DateTimePicker } from '../../ui/DateTimePicker';
+import LargeModeRequired from '../../ui/LargeModeRequired';
+import {
+  Avatar,
+  Badge,
+  Button,
+  EmptyState,
+  Field,
+  IconButton,
+  IconTile,
+  Label,
+  Modal,
+  Panel,
+  PanelHeader,
+  Section,
+  Segmented,
+  StatusDot,
+  Toolbar,
+  inputClass,
+} from '../DatabasePage/ui';
 
 interface AccessControlData {
   Ranks?: Rank[];
@@ -13,10 +63,166 @@ interface AccessControlData {
   Characters?: Character[];
   DiscordLogsEnabled?: boolean;
 }
-import { fetchNui } from '../../../utils/fetchNui';
-import { copyTextToClipboard, openExternalUrl } from '../../../utils/misc';
-import { dropdownPositionFrom } from '../../../utils/dropdownPosition';
-import { DateTimePicker } from '../../ui/DateTimePicker';
+
+type ExpiryParts = Exclude<AdminUser['Expires'], number | undefined>;
+type IdType = 'LICENSE' | 'STEAM' | 'DISCORD' | 'DISCORD ROLE' | 'CHARACTER';
+
+/** Lucide has no brand icons, so Steam and Discord use Font Awesome. */
+const ID_TYPES: { id: IdType; key: string; Icon?: LucideIcon; brand?: string }[] = [
+  { id: 'LICENSE', key: 'license', Icon: IdCard },
+  { id: 'STEAM', key: 'steam', brand: 'fa-brands fa-steam' },
+  { id: 'DISCORD', key: 'discord', brand: 'fa-brands fa-discord' },
+  { id: 'DISCORD ROLE', key: 'discord_role', Icon: UsersRound },
+  { id: 'CHARACTER', key: 'player', Icon: UserRound },
+];
+
+const IdTypeIcon: React.FC<{ type?: (typeof ID_TYPES)[number]; size?: number }> = ({ type, size = 16 }) => {
+  if (type?.Icon) return <type.Icon size={size} />;
+  return <i className={type?.brand} style={{ fontSize: size }}></i>;
+};
+
+/** Icon plus text, for Field labels and Section titles. */
+const IconLabel: React.FC<{ icon: React.ReactNode; children: React.ReactNode }> = ({ icon, children }) => (
+  <span className="inline-flex items-center gap-2">
+    <span className="shrink-0 opacity-70 flex items-center">{icon}</span>
+    {children}
+  </span>
+);
+
+const WEBHOOK_EVENTS = ['all', 'ban', 'kick', 'unban', 'report', 'duty', 'adminlog', 'exploit', 'warn'];
+
+const idTypeOf = (identifier: string): IdType => {
+  if (identifier.startsWith('steam:')) return 'STEAM';
+  if (identifier.startsWith('discord:')) return 'DISCORD';
+  if (identifier.startsWith('license:')) return 'LICENSE';
+  if (identifier.startsWith('role:')) return 'DISCORD ROLE';
+  return 'CHARACTER';
+};
+
+const toExpiryParts = (date: Date): ExpiryParts => ({
+  day: date.getDate(),
+  month: date.getMonth() + 1,
+  year: date.getFullYear(),
+  hour: date.getHours(),
+  min: date.getMinutes(),
+});
+
+const normalizeExpiry = (expiry: AdminUser['Expires']) =>
+  typeof expiry === 'number' ? toExpiryParts(new Date(expiry * 1000)) : expiry;
+
+const defaultExpiry = () => toExpiryParts(new Date(Date.now() + 24 * 60 * 60 * 1000));
+
+const pad = (value: number) => String(value).padStart(2, '0');
+
+const formatExpiry = (expiry: AdminUser['Expires']) => {
+  const parts = normalizeExpiry(expiry);
+  if (!parts?.day) return null;
+  return `${pad(parts.day)}/${pad(parts.month)}/${parts.year} ${pad(parts.hour)}:${pad(parts.min)}`;
+};
+
+const formatDutyTime = (totalSeconds?: number) => {
+  const s = Math.max(0, Math.floor(totalSeconds || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${s}s`;
+};
+
+const getSteamProfileLink = (steamHex: string) => {
+  if (!steamHex) return '';
+  try {
+    const cleanHex = steamHex.replace('steam:', '').trim();
+    return `https://steamcommunity.com/profiles/${BigInt(`0x${cleanHex}`).toString()}`;
+  } catch {
+    return '';
+  }
+};
+
+/** Accepts a SteamID64, a steamcommunity profile URL or a hex, and returns `steam:<hex>`. */
+const formatSteamIdentifier = (input: string) => {
+  let clean = input.trim();
+  const profileMatch = clean.match(/steamcommunity\.com\/profiles\/(\d+)/i);
+  if (profileMatch?.[1]) clean = profileMatch[1];
+
+  if (/^\d+$/.test(clean)) {
+    try {
+      return `steam:${BigInt(clean).toString(16)}`;
+    } catch {
+      return clean;
+    }
+  }
+
+  const cleanHex = clean.replace('steam:', '');
+  if (/^[0-9a-fA-F]+$/.test(cleanHex)) {
+    return clean.startsWith('steam:') ? clean.toLowerCase() : `steam:${clean.toLowerCase()}`;
+  }
+  return clean;
+};
+
+/** Ranks are colored by their position on the board, strongest first. */
+const TIER_COLORS = ['#f5b83d', '#a78bfa', '#60a5fa', '#34d399', '#f472b6', '#22d3ee', '#fb923c', '#a3e635'];
+const FALLBACK_COLOR = '#60a5fa';
+const UNKNOWN_RANK_COLOR = '#f87171';
+
+/** Appends an alpha channel to a #rrggbb color. color-mix is avoided since older CEF builds lack it. */
+const withAlpha = (hex: string, alpha: number) =>
+  `${hex}${Math.round(alpha * 255)
+    .toString(16)
+    .padStart(2, '0')}`;
+
+const CoverageRing: React.FC<{ value: number; color: string }> = ({ value, color }) => {
+  const radius = 16;
+  const circumference = 2 * Math.PI * radius;
+  return (
+    <div className="relative w-12 h-12 shrink-0">
+      <svg viewBox="0 0 40 40" className="w-full h-full -rotate-90">
+        <circle cx="20" cy="20" r={radius} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="3.5" />
+        <circle
+          cx="20"
+          cy="20"
+          r={radius}
+          fill="none"
+          stroke={color}
+          strokeWidth="3.5"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - value / 100)}
+          className="transition-all duration-500"
+        />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center font-mono text-xs font-bold text-primary tabular-nums">
+        {value}%
+      </span>
+    </div>
+  );
+};
+
+const isLinked = (value: string) => !!value.trim() && value !== 'Not Linked' && value !== 'unknown';
+
+const roleColorOf = (role?: DiscordRole) =>
+  role?.color && role.color > 0 ? `#${role.color.toString(16).padStart(6, '0')}` : undefined;
+
+const Switch: React.FC<{ checked: boolean; muted?: boolean; tone?: 'accent' | 'warning' }> = ({
+  checked,
+  muted,
+  tone = 'accent',
+}) => (
+  <span
+    className={cn(
+      'relative w-9 h-5 rounded-full shrink-0 transition-colors',
+      checked ? (tone === 'warning' ? 'bg-warning' : 'bg-accent') : 'bg-white/10',
+      muted && 'opacity-50',
+    )}
+  >
+    <span
+      className={cn(
+        'absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform',
+        checked && 'translate-x-4',
+      )}
+    />
+  </span>
+);
 
 const AccessControlPage: React.FC = () => {
   const {
@@ -35,57 +241,56 @@ const AccessControlPage: React.FC = () => {
     characters,
     players,
     dbPlayers,
-    setDropdown,
-    showCheckmark,
     discordLogsEnabled,
     setDiscordLogsEnabled,
   } = useAdminMenu();
+
+  const [drawer, setDrawer] = useState<{ kind: 'admin' | 'rank'; id: string } | null>(null);
+
+  const [adminSearch, setAdminSearch] = useState('');
+  const [adminStatus, setAdminStatus] = useState<'all' | 'online' | 'temporary'>('all');
+  const [adminToEdit, setAdminToEdit] = useState<AdminUser | null>(null);
+  const [adminToDelete, setAdminToDelete] = useState<AdminUser | null>(null);
+  const [isAddAdminModalOpen, setIsAddAdminModalOpen] = useState(false);
+  const [adminForm, setAdminForm] = useState<Partial<AdminUser>>({});
+  const [idType, setIdType] = useState<IdType>('LICENSE');
+  const [pickerSearch, setPickerSearch] = useState('');
   const [duplicateAdminError, setDuplicateAdminError] = useState(false);
-  const [activeTab, setActiveTab] = useState<'Permissions' | 'Admins'>('Admins');
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const [isEditingPermissions, setIsEditingPermissions] = useState(false);
+  const [isAddRankModalOpen, setIsAddRankModalOpen] = useState(false);
+  const [rankToEdit, setRankToEdit] = useState<Rank | null>(null);
+  const [rankToDelete, setRankToDelete] = useState<Rank | null>(null);
+  const [rankForm, setRankForm] = useState<Partial<Rank>>({ Id: '', Name: '' });
+  const [copiedPermissions, setCopiedPermissions] = useState<string[] | null>(null);
+  const [permSearch, setPermSearch] = useState('');
+  const [grantedOnly, setGrantedOnly] = useState(false);
+
+  useEffect(() => {
+    fetchNui<AccessControlData | false>('fetchAccessControl').then((data) => {
+      if (!data) return;
+      if (data.Admins) setAdmins(toArray(data.Admins));
+      if (data.Ranks) setRanks(toArray(data.Ranks));
+      if (data.DiscordRoles) setDiscordRoles(toArray(data.DiscordRoles));
+      if (data.AvailablePermissions) setAvailablePermissions(toArray(data.AvailablePermissions));
+      if (data.DiscordLogsEnabled !== undefined) setDiscordLogsEnabled(!!data.DiscordLogsEnabled);
+      if (data.Characters) {
+        const characterList = toArray<Character>(data.Characters);
+        setCharacters(characterList);
+        // Characters carry identifiers, so they double as the database player list here.
+        setDbPlayers(characterList);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    setDuplicateAdminError(false);
+  }, [adminForm.Identifier]);
 
   const handleToggleDiscordLogs = () => {
     const next = !discordLogsEnabled;
     setDiscordLogsEnabled(next);
     fetchNui('setDiscordLogs', { enabled: next });
-  };
-
-  const getSteamProfileLink = (steamHex: string) => {
-    if (!steamHex) return '';
-    try {
-      const cleanHex = steamHex.replace('steam:', '').trim();
-      const steamID64 = BigInt(`0x${cleanHex}`).toString();
-      return `https://steamcommunity.com/profiles/${steamID64}`;
-    } catch (e) {
-      return '';
-    }
-  };
-
-  const formatSteamIdentifier = (input: string) => {
-    let clean = input.trim();
-    // Check if it's a steam profiles URL
-    const profileMatch = clean.match(/steamcommunity\.com\/profiles\/(\d+)/i);
-    if (profileMatch && profileMatch[1]) {
-      clean = profileMatch[1];
-    }
-    // Check if it's a decimal SteamID64
-    if (/^\d+$/.test(clean)) {
-      try {
-        const hex = BigInt(clean).toString(16);
-        return `steam:${hex}`;
-      } catch (e) {
-        return clean;
-      }
-    }
-    // If it's already a hex (with or without steam: prefix)
-    const cleanHex = clean.replace('steam:', '');
-    if (/^[0-9a-fA-F]+$/.test(cleanHex)) {
-      if (!clean.startsWith('steam:')) {
-        return `steam:${clean.toLowerCase()}`;
-      }
-      return clean.toLowerCase();
-    }
-    return clean;
   };
 
   const resolveAdminDetails = (admin: AdminUser) => {
@@ -94,7 +299,6 @@ const AccessControlPage: React.FC = () => {
     // newly-added admins showing as "Unknown Player" until the page reopens.
     const searchLists = [...players, ...dbPlayers, ...characters];
 
-    // Clean prefixes helper for comparison
     const cleanId = (id?: string) => {
       if (!id) return '';
       return id
@@ -160,12 +364,10 @@ const AccessControlPage: React.FC = () => {
     else if (identifierType === 'steam') resolvedSteam = admin.Identifier;
     else if (identifierType === 'license') resolvedLicense = admin.Identifier;
 
-    const cleanDiscord = resolvedDiscord.replace('discord:', '');
-    const cleanSteam = resolvedSteam.replace('steam:', '');
-    const cleanLicense = resolvedLicense.replace('license:', '');
-
     let displayName = 'Unknown Player';
-    if (admin.Identifier.startsWith('role:')) {
+    if (admin.Name) {
+      displayName = admin.Name;
+    } else if (admin.Identifier.startsWith('role:')) {
       const roleId = admin.Identifier.replace('role:', '');
       const discordRole = discordRoles.find((r) => r.id === roleId);
       displayName = discordRole?.name ? `Role: ${discordRole.name}` : `Discord Role: ${roleId}`;
@@ -178,95 +380,27 @@ const AccessControlPage: React.FC = () => {
     }
 
     return {
-      player: foundPlayer,
       isOnline,
       displayName,
-      discordId: cleanDiscord,
-      steamHex: cleanSteam,
-      licenseHex: cleanLicense,
+      discordId: resolvedDiscord.replace('discord:', ''),
+      steamHex: resolvedSteam.replace('steam:', ''),
+      licenseHex: resolvedLicense.replace('license:', ''),
       citizenId: admin.CharacterId || foundPlayer?.CitizenId || '',
     };
   };
 
-  const formatDutyTime = (totalSeconds?: number) => {
-    const s = Math.max(0, Math.floor(totalSeconds || 0));
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    if (h > 0) return `${h}h ${m}m`;
-    if (m > 0) return `${m}m`;
-    return `${s}s`;
+  const closeDrawer = () => setDrawer(null);
+
+  const openRankDrawer = (rank: Rank) => {
+    setDrawer({ kind: 'rank', id: rank.Id });
+    setIsEditingPermissions(false);
+    setPermSearch('');
   };
 
-  const handleCopy = (text: string, id: string) => {
-    copyTextToClipboard(text);
-    setCopiedId(id);
-    showCheckmark();
-    setTimeout(() => setCopiedId(null), 1500);
+  const closeRankModal = () => {
+    setIsAddRankModalOpen(false);
+    setRankToEdit(null);
   };
-
-  useEffect(() => {
-    fetchNui<AccessControlData | false>('fetchAccessControl').then((data) => {
-      if (!data) return;
-      if (data.Admins) setAdmins(toArray(data.Admins));
-      if (data.Ranks) setRanks(toArray(data.Ranks));
-      if (data.DiscordRoles) setDiscordRoles(toArray(data.DiscordRoles));
-      if (data.AvailablePermissions) setAvailablePermissions(toArray(data.AvailablePermissions));
-      if (data.DiscordLogsEnabled !== undefined) setDiscordLogsEnabled(!!data.DiscordLogsEnabled);
-      if (data.Characters) {
-        const characterList = toArray<Character>(data.Characters);
-        setCharacters(characterList);
-        // Characters carry identifiers, so they double as the database player list here.
-        setDbPlayers(characterList);
-      }
-    });
-  }, []);
-
-  const isLargeMode = menuSize === 'Large';
-
-  // Focus states for search dropdowns
-  const [isPlayerSearchFocused, setIsPlayerSearchFocused] = useState(false);
-  const [isRoleSearchFocused, setIsRoleSearchFocused] = useState(false);
-
-  // Permissions Tab State
-  const [selectedRank, setSelectedRank] = useState<Rank | null>(null);
-  const [isEditingPermissions, setIsEditingPermissions] = useState(false);
-  const [isAddRankModalOpen, setIsAddRankModalOpen] = useState(false);
-  const [rankToEdit, setRankToEdit] = useState<Rank | null>(null);
-  const [rankToDelete, setRankToDelete] = useState<Rank | null>(null);
-  const [rankForm, setRankForm] = useState<Partial<Rank>>({
-    Id: '',
-    Name: '',
-  });
-  const [copiedPermissions, setCopiedPermissions] = useState<string[] | null>(null);
-
-  // Admins Tab State
-  const [searchQuery, setSearchQuery] = useState('');
-  const [rankFilter, setRankFilter] = useState('all');
-  const [adminStatus, setAdminStatus] = useState<'all' | 'online' | 'temporary'>('all');
-  const [permSearch, setPermSearch] = useState('');
-  const [grantedOnly, setGrantedOnly] = useState(false);
-  const [adminToEdit, setAdminToEdit] = useState<AdminUser | null>(null);
-  const [adminToDelete, setAdminToDelete] = useState<AdminUser | null>(null);
-  const [isAddAdminModalOpen, setIsAddAdminModalOpen] = useState(false);
-
-  // Edit/Add Admin Form State
-  const [adminForm, setAdminForm] = useState<Partial<AdminUser>>({
-    Identifier: '',
-    RankId: '',
-    IsTemp: false,
-    Steam: '',
-    Discord: '',
-    DiscordRoles: [],
-    CharacterId: '',
-  });
-
-  const [idType, setIdType] = useState<'LICENSE' | 'STEAM' | 'DISCORD' | 'DISCORD ROLE' | 'CHARACTER'>('LICENSE');
-
-  useEffect(() => {
-    setDuplicateAdminError(false);
-  }, [adminForm.Identifier]);
-
-  const allPermissionIds = availablePermissions.flatMap((cat) => cat.permissions.map((p) => p.id));
 
   const handleOpenAddRank = () => {
     setRankForm({ Id: '', Name: '' });
@@ -279,64 +413,59 @@ const AccessControlPage: React.FC = () => {
   };
 
   const handleSaveRank = () => {
-    const dataToSave = rankToEdit
-      ? ({ ...selectedRank, ...rankForm } as Rank)
-      : {
-          Id: rankForm.Id || `rank_${Date.now()}`,
-          Name: rankForm.Name || 'New Rank',
-          Permissions: [],
-        };
+    const current = rankToEdit && (ranks.find((r) => r.Id === rankToEdit.Id) ?? rankToEdit);
+    const dataToSave: Rank = current
+      ? { ...current, Name: rankForm.Name || current.Name }
+      : { Id: rankForm.Id || `rank_${Date.now()}`, Name: rankForm.Name || 'New Rank', Permissions: [] };
 
     fetchNui('saveRank', dataToSave);
-    setIsAddRankModalOpen(false);
-    setRankToEdit(null);
+    if (!current) openRankDrawer(dataToSave);
+    closeRankModal();
   };
 
   const handleDeleteRank = () => {
     if (!rankToDelete) return;
     fetchNui('deleteRank', { id: rankToDelete.Id });
+    if (drawer?.kind === 'rank' && drawer.id === rankToDelete.Id) closeDrawer();
     setRankToDelete(null);
   };
 
-  const handleTogglePermission = (rankId: string, permission: string) => {
-    setRanks((prev) =>
-      prev.map((rank) => {
-        if (rank.Id === rankId) {
-          const hasPerm = rank.Permissions.includes(permission);
-          const newPermissions = hasPerm
-            ? rank.Permissions.filter((p) => p !== permission)
-            : [...rank.Permissions, permission];
+  const allPermissionIds = availablePermissions.flatMap((cat) => cat.permissions.map((p) => p.id));
 
-          const updatedRank = { ...rank, Permissions: newPermissions };
+  const saveRankPermissions = (rank: Rank, permissions: string[]) => {
+    const updatedRank = { ...rank, Permissions: permissions };
+    fetchNui('saveRank', updatedRank);
+    setRanks((prev) => prev.map((r) => (r.Id === rank.Id ? updatedRank : r)));
+  };
 
-          // Save to DB immediately
-          fetchNui('saveRank', updatedRank);
-
-          if (selectedRank?.Id === rankId) {
-            setSelectedRank(updatedRank);
-          }
-
-          return updatedRank;
-        }
-        return rank;
-      }),
+  const handleTogglePermission = (rank: Rank, permission: string) => {
+    // A wildcard rank is expanded to an explicit list so a single permission can be removed from it.
+    const current = rank.Permissions.includes('all') ? allPermissionIds : rank.Permissions;
+    saveRankPermissions(
+      rank,
+      current.includes(permission) ? current.filter((p) => p !== permission) : [...current, permission],
     );
   };
 
-  const handleOpenAddAdmin = () => {
-    const now = new Date();
-    const defaultExpiry = {
-      day: now.getDate() + 1, // Default 1 day
-      month: now.getMonth() + 1,
-      year: now.getFullYear(),
-      hour: now.getHours(),
-      min: now.getMinutes(),
-    };
+  const closeAdminModal = () => {
+    setIsAddAdminModalOpen(false);
+    setAdminToEdit(null);
+    setPickerSearch('');
+  };
+
+  const selectIdType = (type: IdType) => {
+    setIdType(type);
+    setAdminForm((prev) => ({ ...prev, Identifier: '', CharacterId: '', DiscordRoles: [] }));
+    setPickerSearch('');
+  };
+
+  const handleOpenAddAdmin = (rankId?: string) => {
     setAdminForm({
       Identifier: '',
-      RankId: ranks[0]?.Id || '',
+      Name: '',
+      RankId: rankId || ranks[0]?.Id || '',
       IsTemp: false,
-      Expires: defaultExpiry,
+      Expires: defaultExpiry(),
       Steam: '',
       Discord: '',
       DiscordRoles: [],
@@ -345,41 +474,18 @@ const AccessControlPage: React.FC = () => {
       WebhookEvents: ['all'],
     });
     setIdType('LICENSE');
+    setPickerSearch('');
     setDuplicateAdminError(false);
     setIsAddAdminModalOpen(true);
   };
 
   const handleOpenEditAdmin = (admin: AdminUser) => {
-    // Reflect the admin's real identifier type in the modal so the "Type" chip is
-    // accurate and the save path never re-prefixes a non-license identifier.
-    const id = admin.Identifier || '';
-    setIdType(
-      id.startsWith('steam:')
-        ? 'STEAM'
-        : id.startsWith('discord:')
-          ? 'DISCORD'
-          : id.startsWith('license:')
-            ? 'LICENSE'
-            : id.startsWith('role:')
-              ? 'DISCORD ROLE'
-              : 'CHARACTER',
-    );
-
-    let expiry = admin.Expires;
-    if (typeof expiry === 'number') {
-      const d = new Date(expiry * 1000);
-      expiry = {
-        day: d.getDate(),
-        month: d.getMonth() + 1,
-        year: d.getFullYear(),
-        hour: d.getHours(),
-        min: d.getMinutes(),
-      };
-    }
-
+    // Reflect the admin's real identifier type so the save path never re-prefixes a non-license identifier.
+    setIdType(idTypeOf(admin.Identifier || ''));
     setAdminForm({
       ...admin,
-      Expires: expiry,
+      Name: admin.Name || '',
+      Expires: normalizeExpiry(admin.Expires),
       Steam: admin.Steam || '',
       Discord: admin.Discord || '',
       DiscordRoles: admin.DiscordRoles || [],
@@ -392,7 +498,7 @@ const AccessControlPage: React.FC = () => {
   };
 
   const handleSaveAdmin = () => {
-    let finalForm = { ...adminForm };
+    const finalForm = { ...adminForm };
 
     if (adminToEdit) {
       // Editing an existing admin: keep the original identifier verbatim so the
@@ -414,18 +520,22 @@ const AccessControlPage: React.FC = () => {
       }
     }
 
-    let adminName = adminForm.Identifier;
-    if (idType === 'DISCORD ROLE') {
-      const role = discordRoles.find((r) => `role:${r.id}` === finalForm.Identifier);
-      if (role) adminName = role.name;
-    } else {
-      const player = dbPlayers.find(
-        (p) =>
-          p.CitizenId === finalForm.Identifier ||
-          p.Steam === finalForm.Identifier ||
-          p.License === finalForm.Identifier,
-      );
-      if (player && player.Name) adminName = player.Name;
+    // A typed name is kept as is; new admins otherwise default to their player or role name.
+    // Editing with an empty name clears it so the live name shows again.
+    const customName = adminForm.Name?.trim() || '';
+    let adminName = customName;
+    if (!customName && !adminToEdit) {
+      if (idType === 'DISCORD ROLE') {
+        adminName = discordRoles.find((r) => `role:${r.id}` === finalForm.Identifier)?.name || '';
+      } else {
+        const player = dbPlayers.find(
+          (p) =>
+            p.CitizenId === finalForm.Identifier ||
+            p.Steam === finalForm.Identifier ||
+            p.License === finalForm.Identifier,
+        );
+        adminName = player?.Name || '';
+      }
     }
     finalForm.Name = adminName;
 
@@ -443,7 +553,7 @@ const AccessControlPage: React.FC = () => {
       finalForm.DiscordRoles.forEach((roleId) => {
         const identifier = `role:${roleId}`;
         if (isDuplicate(identifier)) return;
-        const roleName = discordRoles.find((r) => r.id === roleId)?.name || roleId;
+        const roleName = customName || discordRoles.find((r) => r.id === roleId)?.name || roleId;
         fetchNui('saveAdmin', { ...finalForm, Identifier: identifier, Name: roleName });
       });
     } else if (isDuplicate(finalForm.Identifier)) {
@@ -452,1576 +562,1291 @@ const AccessControlPage: React.FC = () => {
     } else {
       fetchNui('saveAdmin', finalForm);
     }
-    const now = new Date();
-    const defaultExpiry = {
-      day: now.getDate() + 1,
-      month: now.getMonth() + 1,
-      year: now.getFullYear(),
-      hour: now.getHours(),
-      min: now.getMinutes(),
-    };
-    setAdminForm({
-      Identifier: '',
-      RankId: ranks[0]?.Id || '',
-      DiscordRoles: [],
-      IsTemp: false,
-      Expires: defaultExpiry,
-      Webhook: '',
-      WebhookEvents: ['all'],
-    });
-    setIsAddAdminModalOpen(false);
-    setAdminToEdit(null);
+    closeAdminModal();
   };
 
   const handleDeleteAdmin = () => {
     if (!adminToDelete) return;
     fetchNui('deleteAdmin', { identifier: adminToDelete.Identifier });
+    if (drawer?.kind === 'admin' && drawer.id === adminToDelete.Identifier) closeDrawer();
     setAdminToDelete(null);
   };
 
-  const filteredAdmins = admins.filter((admin) => {
-    if (rankFilter !== 'all' && admin.RankId !== rankFilter) return false;
-    if (adminStatus === 'temporary' && !admin.IsTemp) return false;
-    const details = resolveAdminDetails(admin);
-    if (adminStatus === 'online' && !details.isOnline) return false;
+  const toggleDiscordRole = (roleId: string) => {
+    setAdminForm((prev) => {
+      const current = prev.DiscordRoles || [];
+      const next = current.includes(roleId) ? current.filter((id) => id !== roleId) : [...current, roleId];
+      return { ...prev, Identifier: next.length > 0 ? `role:${next[0]}` : '', DiscordRoles: next };
+    });
+    setPickerSearch('');
+  };
 
-    const query = searchQuery.toLowerCase();
-    if (!query) return true;
-    const rankName = ranks.find((rank) => rank.Id === admin.RankId)?.Name;
-    return [admin.Identifier, admin.Name, admin.DisplayName, admin.CharacterId, details.displayName, details.discordId, details.steamHex, rankName].some(
-      (value) => typeof value === 'string' && value.toLowerCase().includes(query),
+  const toggleWebhookEvent = (event: string) => {
+    let current = adminForm.WebhookEvents || ['all'];
+    if (event === 'all') current = ['all'];
+    else {
+      current = current.filter((e) => e !== 'all');
+      current = current.includes(event) ? current.filter((e) => e !== event) : [...current, event];
+      if (current.length === 0) current = ['all'];
+    }
+    setAdminForm({ ...adminForm, WebhookEvents: current });
+  };
+
+  const toggleTemporary = () => {
+    const isTemp = !adminForm.IsTemp;
+    setAdminForm({ ...adminForm, IsTemp: isTemp, Expires: isTemp && !adminForm.Expires ? defaultExpiry() : adminForm.Expires });
+  };
+
+  if (menuSize !== 'Large') {
+    return (
+      <LargeModeRequired
+        pageName={t('ui.pages.access.ranks.access_control')}
+        description={t('ui.pages.access.large_mode_desc')}
+      />
     );
+  }
+
+  const adminDetails = new Map(admins.map((admin) => [admin.Identifier, resolveAdminDetails(admin)]));
+  const detailsOf = (admin: AdminUser) => adminDetails.get(admin.Identifier) ?? resolveAdminDetails(admin);
+  const rankById = new Map(ranks.map((rank) => [rank.Id, rank]));
+  const permissionLabels = new Map(
+    availablePermissions.flatMap((cat) => cat.permissions.map((p) => [p.id, p.label] as const)),
+  );
+  const adminCountByRank = admins.reduce(
+    (counts, admin) => counts.set(admin.RankId, (counts.get(admin.RankId) ?? 0) + 1),
+    new Map<string, number>(),
+  );
+
+  const onlineCount = admins.filter((admin) => detailsOf(admin).isOnline).length;
+  const tempCount = admins.filter((admin) => admin.IsTemp).length;
+  const totalPermissions = allPermissionIds.length;
+
+  const grantedCount = (rank: Rank) =>
+    rank.Permissions.includes('all')
+      ? totalPermissions
+      : allPermissionIds.filter((id) => rank.Permissions.includes(id)).length;
+
+  const adminQuery = adminSearch.toLowerCase();
+  const filteredAdmins = admins.filter((admin) => {
+    if (adminStatus === 'temporary' && !admin.IsTemp) return false;
+    const details = detailsOf(admin);
+    if (adminStatus === 'online' && !details.isOnline) return false;
+    if (!adminQuery) return true;
+    return [
+      admin.Identifier,
+      admin.Name,
+      admin.DisplayName,
+      admin.CharacterId,
+      details.displayName,
+      details.discordId,
+      details.steamHex,
+      rankById.get(admin.RankId)?.Name,
+    ].some((value) => typeof value === 'string' && value.toLowerCase().includes(adminQuery));
   });
+
+  // Highest ranks first, and within a rank online admins first.
+  const isFiltering = !!adminQuery || adminStatus !== 'all';
+  const adminsByRank = new Map<string, AdminUser[]>();
+  const unassignedAdmins: AdminUser[] = [];
+  [...filteredAdmins]
+    .sort(
+      (a, b) =>
+        Number(detailsOf(b).isOnline) - Number(detailsOf(a).isOnline) ||
+        detailsOf(a).displayName.localeCompare(detailsOf(b).displayName),
+    )
+    .forEach((admin) => {
+      if (rankById.has(admin.RankId)) adminsByRank.set(admin.RankId, [...(adminsByRank.get(admin.RankId) ?? []), admin]);
+      else unassignedAdmins.push(admin);
+    });
+  const sortedRanks = [...ranks].sort(
+    (a, b) =>
+      Number(b.Permissions.includes('all')) - Number(a.Permissions.includes('all')) ||
+      grantedCount(b) - grantedCount(a) ||
+      a.Name.localeCompare(b.Name),
+  );
+  const rankColors = new Map(sortedRanks.map((rank, index) => [rank.Id, TIER_COLORS[index % TIER_COLORS.length]]));
+  const rankColorOf = (rank?: Rank) => (rank ? rankColors.get(rank.Id) ?? FALLBACK_COLOR : UNKNOWN_RANK_COLOR);
+
+  const boardColumns: { rank?: Rank; admins: AdminUser[] }[] = [
+    ...sortedRanks.map((rank) => ({ rank, admins: adminsByRank.get(rank.Id) ?? [] })),
+    ...(unassignedAdmins.length > 0 ? [{ admins: unassignedAdmins }] : []),
+  ].filter((column) => !isFiltering || column.admins.length > 0);
+
+  const drawerAdmin = drawer?.kind === 'admin' ? admins.find((admin) => admin.Identifier === drawer.id) : undefined;
+  const drawerRank = drawer?.kind === 'rank' ? ranks.find((rank) => rank.Id === drawer.id) : undefined;
 
   const permQuery = permSearch.toLowerCase();
   const visiblePermissionCategories = availablePermissions
     .map((category) => ({
       ...category,
       permissions: category.permissions.filter((perm) => {
-        if (grantedOnly && !selectedRank?.Permissions.includes(perm.id)) return false;
+        const granted = drawerRank?.Permissions.includes('all') || drawerRank?.Permissions.includes(perm.id);
+        if (grantedOnly && !granted) return false;
         return !permQuery || perm.label.toLowerCase().includes(permQuery) || perm.id.toLowerCase().includes(permQuery);
       }),
     }))
     .filter((category) => category.permissions.length > 0);
 
-  const filteredRanks = ranks.filter((rank) => rank.Name.toLowerCase().includes(searchQuery.toLowerCase()));
-
-  if (!isLargeMode) {
+  const renderRankBadge = (rank?: Rank) => {
+    const Icon = rankIcon(rank);
+    const color = rankColorOf(rank);
     return (
-      <div className="flex flex-col h-full w-full items-center justify-center text-muted p-4">
-        <div className="w-16 h-16 rounded-2xl bg-bg-secondary/60 border border-border/60 flex items-center justify-center mb-5">
-          <i className="fa-solid fa-shield-halved text-3xl text-accent/70"></i>
-        </div>
-        <p className="text-lg font-semibold text-primary text-center max-w-xs">
-          {t('ui.pages.access.large_mode_opt').split('Large Mode')[0]}
-          <span className="text-accent">Large Mode</span>
-          {t('ui.pages.access.large_mode_opt').split('Large Mode')[1]}
-        </p>
-        <p className="text-sm mt-2 text-muted text-center max-w-xs">{t('ui.pages.access.large_mode_desc')}</p>
+      <span
+        className="inline-flex items-center gap-1.5 max-w-full px-2 py-1 rounded-md border font-mono text-xs font-bold uppercase tracking-wider leading-none whitespace-nowrap"
+        style={{ color, backgroundColor: withAlpha(color, 0.1), borderColor: withAlpha(color, 0.3) }}
+      >
+        <Icon size={11} className="shrink-0" />
+        <span className="truncate">{rank?.Name || t('ui.pages.access.management.unknown_rank')}</span>
+      </span>
+    );
+  };
+
+  const renderRankAccess = (rank?: Rank) => {
+    if (!rank) return null;
+    if (rank.Permissions.includes('all')) return <Badge tone="success">{t('ui.pages.access.ranks.full_access')}</Badge>;
+    const count = grantedCount(rank);
+    if (count === 0) return <Badge tone="danger">{t('ui.pages.access.ranks.no_access')}</Badge>;
+    return (
+      <Badge tone={count === totalPermissions ? 'success' : 'default'}>
+        {count}/{totalPermissions}
+      </Badge>
+    );
+  };
+
+  const renderAdminAvatar = (admin: AdminUser, className?: string) => {
+    const details = detailsOf(admin);
+    if (!admin.Identifier.startsWith('role:')) {
+      return <Avatar name={details.displayName} src={admin.AvatarUrl} online={details.isOnline} className={className} />;
+    }
+    const color = roleColorOf(discordRoles.find((r) => `role:${r.id}` === admin.Identifier)) ?? FALLBACK_COLOR;
+    return (
+      <div
+        className={cn('shrink-0 rounded-xl border flex items-center justify-center', className ?? 'w-9 h-9 text-base')}
+        style={{ color, backgroundColor: withAlpha(color, 0.12), borderColor: withAlpha(color, 0.25) }}
+      >
+        <i className="fa-brands fa-discord"></i>
       </div>
     );
-  }
+  };
 
-  // Live summary metrics for the header stat bar
-  const onlineCount = admins.reduce((n, a) => n + (resolveAdminDetails(a).isOnline ? 1 : 0), 0);
-  const tempCount = admins.filter((a) => a.IsTemp).length;
-  const stats = [
-    {
-      icon: 'fa-solid fa-user-shield',
-      label: t('ui.pages.access.tabs.admins'),
-      value: admins.length,
-      tone: 'text-accent',
-    },
-    { icon: 'fa-solid fa-signal', label: 'Online', value: onlineCount, tone: 'text-success' },
-    {
-      icon: 'fa-solid fa-layer-group',
-      label: t('ui.pages.access.tabs.permissions'),
-      value: ranks.length,
-      tone: 'text-accent',
-    },
-    { icon: 'fa-regular fa-clock', label: 'Temporary', value: tempCount, tone: 'text-warning' },
-  ];
+  const renderIdentityField = (icon: React.ReactNode, label: string, value: string, extra?: React.ReactNode) => (
+    <Field label={<IconLabel icon={icon}>{label}</IconLabel>} mono>
+      <span className="truncate">{value}</span>
+      {extra}
+      <CopyButton text={value} />
+    </Field>
+  );
 
-  const rankTone = (rank?: Rank | null): { color: string; label: string; icon: string } => {
-    const nl = (rank?.Name || '').toLowerCase();
-    if (nl.includes('god') || nl.includes('owner') || nl.includes('dev'))
-      return { color: 'rgb(234,179,8)', label: 'Leadership', icon: 'fa-crown' };
-    if (nl.includes('admin') || nl.includes('super'))
-      return { color: 'rgb(99,102,241)', label: 'Administration', icon: 'fa-user-shield' };
-    if (nl.includes('mod') || nl.includes('support'))
-      return { color: 'rgb(52,211,153)', label: 'Moderation', icon: 'fa-user-gear' };
-    return { color: 'rgb(var(--accent))', label: 'Staff', icon: 'fa-shield-halved' };
+  const renderAdminDetail = (admin: AdminUser) => {
+    const details = detailsOf(admin);
+    const rank = rankById.get(admin.RankId);
+    const isRole = admin.Identifier.startsWith('role:');
+    const steamLink = getSteamProfileLink(details.steamHex);
+    const steamLinkButton = steamLink && (
+      <IconButton
+        className="p-1"
+        title={t('ui.pages.access.management.open_steam')}
+        onClick={() => openExternalUrl(steamLink)}
+      >
+        <ExternalLink size={12} />
+      </IconButton>
+    );
+    const isSteamIdentifier = admin.Identifier.startsWith('steam:');
+    const explicitPermissions = rank && !rank.Permissions.includes('all') ? rank.Permissions : [];
+
+    return (
+      <>
+        <PanelHeader
+          media={renderAdminAvatar(admin, 'w-11 h-11 text-lg')}
+          title={details.displayName}
+          subtitle={rank?.Name || t('ui.pages.access.management.unknown_rank')}
+          onClose={closeDrawer}
+        />
+
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 space-y-6">
+          <div className="flex flex-wrap gap-2">
+            {rank ? (
+              <button type="button" title={t('ui.pages.access.tabs.permissions')} onClick={() => openRankDrawer(rank)}>
+                {renderRankBadge(rank)}
+              </button>
+            ) : (
+              renderRankBadge(rank)
+            )}
+            {!isRole &&
+              (details.isOnline ? (
+                <StatusDot tone="success" label={t('ui.pages.access.management.filter_online')} />
+              ) : (
+                <StatusDot tone="default" label={t('ui.pages.access.management.filter_offline')} />
+              ))}
+            {admin.IsTemp && <StatusDot tone="warning" label={t('ui.pages.access.management.filter_temporary')} />}
+          </div>
+
+          <Section title={t('ui.pages.access.management.identity')}>
+            <div>
+              {renderIdentityField(
+                <Fingerprint size={14} />,
+                t('ui.pages.access.management.identifier'),
+                admin.Identifier,
+                isSteamIdentifier && steamLinkButton,
+              )}
+              {isLinked(details.discordId) &&
+                !admin.Identifier.startsWith('discord:') &&
+                renderIdentityField(
+                  <i className="fa-brands fa-discord text-[13px] text-[#5865F2]"></i>,
+                  'Discord',
+                  details.discordId,
+                )}
+              {isLinked(details.steamHex) &&
+                !isSteamIdentifier &&
+                renderIdentityField(
+                  <i className="fa-brands fa-steam text-[13px] text-[#66c0f4]"></i>,
+                  'Steam',
+                  details.steamHex,
+                  steamLinkButton,
+                )}
+              {details.citizenId &&
+                details.citizenId !== admin.Identifier &&
+                renderIdentityField(
+                  <IdCard size={14} />,
+                  t('ui.pages.access.management.citizen_id'),
+                  details.citizenId,
+                )}
+            </div>
+          </Section>
+
+          {!isRole && (
+            <Section title={t('ui.pages.access.management.activity')}>
+              <div>
+                <Field
+                  label={<IconLabel icon={<Timer size={14} />}>{t('ui.pages.access.management.col_duty')}</IconLabel>}
+                  mono
+                >
+                  {formatDutyTime(admin.DutySeconds)}
+                </Field>
+                <Field
+                  label={
+                    <IconLabel icon={<CalendarClock size={14} />}>{t('ui.pages.access.management.col_access')}</IconLabel>
+                  }
+                  mono
+                >
+                  {admin.IsTemp ? (
+                    <span className="text-warning">{formatExpiry(admin.Expires) ?? '?'}</span>
+                  ) : (
+                    t('ui.pages.access.management.permanent')
+                  )}
+                </Field>
+              </div>
+            </Section>
+          )}
+
+          <Section title={t('ui.pages.access.ranks.granted_permissions')} right={renderRankAccess(rank)}>
+            {explicitPermissions.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {explicitPermissions.map((perm) => {
+                  const PermIcon = permissionIcon(perm);
+                  return (
+                    <span
+                      key={perm}
+                      title={perm}
+                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-white/5 border border-white/5 text-sm text-primary/80"
+                    >
+                      <PermIcon size={12} className="shrink-0 text-accent/80" />
+                      {permissionLabels.get(perm) ?? perm}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+          </Section>
+
+          <Section title={t('ui.pages.access.management.logging')}>
+            <div className="space-y-3">
+              <Field label={<IconLabel icon={<Webhook size={14} />}>{t('ui.pages.access.management.webhook')}</IconLabel>}>
+                {admin.Webhook
+                  ? t('ui.pages.access.management.webhook_custom')
+                  : t('ui.pages.access.management.webhook_auto')}
+              </Field>
+              <div className="flex flex-wrap gap-1.5">
+                {(admin.WebhookEvents || ['all']).map((event) => {
+                  const EventIcon = WEBHOOK_EVENT_ICONS[event] ?? Layers;
+                  return (
+                    <Badge key={event} tone="accent" className="gap-1.5">
+                      <EventIcon size={11} />
+                      {event}
+                    </Badge>
+                  );
+                })}
+              </div>
+            </div>
+          </Section>
+        </div>
+
+        <div className="flex gap-2 px-5 py-4 border-t border-white/5 shrink-0">
+          <Button className="flex-1" icon={<Pencil size={13} />} onClick={() => handleOpenEditAdmin(admin)}>
+            {t('ui.pages.access.management.edit')}
+          </Button>
+          <Button variant="danger" icon={<Trash2 size={13} />} onClick={() => setAdminToDelete(admin)}>
+            {t('ui.pages.access.management.revoke')}
+          </Button>
+        </div>
+      </>
+    );
+  };
+
+  const renderRankIcon = (rank: Rank | undefined, className: string, size: number) => {
+    const Icon = rankIcon(rank);
+    const color = rankColorOf(rank);
+    return (
+      <div
+        className={cn('shrink-0 rounded-xl border flex items-center justify-center', className)}
+        style={{ color, backgroundColor: withAlpha(color, 0.14), borderColor: withAlpha(color, 0.3) }}
+      >
+        {rank ? <Icon size={size} /> : <TriangleAlert size={size} />}
+      </div>
+    );
+  };
+
+  const renderPermissionEditor = (rank: Rank) => {
+    const color = rankColorOf(rank);
+    const hasAll = rank.Permissions.includes('all');
+    const granted = grantedCount(rank);
+    const coverage = totalPermissions ? Math.round((granted / totalPermissions) * 100) : 0;
+
+    return (
+      <>
+        <PanelHeader
+          media={renderRankIcon(rank, 'w-10 h-10', 18)}
+          title={rank.Name}
+          subtitle={`${rank.Id} · ${t('ui.pages.access.ranks.perm_count', `${granted}/${totalPermissions}`)}`}
+          onClose={closeDrawer}
+          actions={
+            <>
+              <IconButton title={t('ui.pages.access.ranks.edit_title')} onClick={() => handleOpenEditRank(rank)}>
+                <Pencil size={15} />
+              </IconButton>
+              <IconButton
+                title={t('ui.pages.access.ranks.copy_title')}
+                onClick={() => setCopiedPermissions([...rank.Permissions])}
+              >
+                <Copy size={15} />
+              </IconButton>
+              {copiedPermissions && (
+                <IconButton
+                  title={t('ui.pages.access.ranks.paste_title')}
+                  onClick={() => saveRankPermissions(rank, [...copiedPermissions])}
+                >
+                  <ClipboardPaste size={15} />
+                </IconButton>
+              )}
+              <IconButton
+                tone="danger"
+                title={t('ui.pages.access.ranks.delete_rank_title')}
+                onClick={() => setRankToDelete(rank)}
+              >
+                <Trash2 size={15} />
+              </IconButton>
+            </>
+          }
+        />
+        <div className="h-0.5 bg-white/5 shrink-0">
+          <div className="h-full transition-all duration-500" style={{ width: `${coverage}%`, backgroundColor: color }} />
+        </div>
+
+        <Toolbar className="px-5 py-3 border-b border-white/5">
+          <SearchField
+            className="flex-1 min-w-[180px]"
+            value={permSearch}
+            onChange={setPermSearch}
+            placeholder={t('ui.pages.access.ranks.search_permissions')}
+          />
+          <Button
+            variant="ghost"
+            className={cn(grantedOnly && 'bg-accent/10 text-accent hover:bg-accent/15 hover:text-accent')}
+            onClick={() => setGrantedOnly((value) => !value)}
+          >
+            {t('ui.pages.access.ranks.granted_only')}
+          </Button>
+          {isEditingPermissions ? (
+            <Button variant="primary" icon={<Check size={14} />} onClick={() => setIsEditingPermissions(false)}>
+              {t('ui.pages.access.management.done')}
+            </Button>
+          ) : (
+            <Button variant="primary" icon={<LockOpen size={14} />} onClick={() => setIsEditingPermissions(true)}>
+              {t('ui.pages.access.management.edit_perms')}
+            </Button>
+          )}
+        </Toolbar>
+
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar p-5 space-y-6">
+          {isEditingPermissions ? (
+            <div className="flex items-center justify-end gap-1">
+              <Button variant="ghost" className="py-1.5 text-xs" onClick={() => saveRankPermissions(rank, allPermissionIds)}>
+                {t('ui.pages.access.management.select_all')}
+              </Button>
+              <Button variant="ghost" className="py-1.5 text-xs" onClick={() => saveRankPermissions(rank, [])}>
+                {t('ui.pages.access.management.deselect_all')}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2.5 rounded-lg bg-white/[0.03] border border-white/5 px-3.5 py-2.5 text-sm text-primary/80">
+              <Lock size={14} className="shrink-0" />
+              {t('ui.pages.access.ranks.locked_hint')}
+            </div>
+          )}
+
+          {visiblePermissionCategories.length === 0 ? (
+            <EmptyState title={t('ui.pages.access.ranks.no_permissions_match')} />
+          ) : (
+            visiblePermissionCategories.map((category) => {
+              const categoryGranted = category.permissions.filter(
+                (perm) => hasAll || rank.Permissions.includes(perm.id),
+              ).length;
+              const CategoryIcon = categoryIcon(category.title);
+              return (
+                <Section
+                  key={category.title}
+                  title={<IconLabel icon={<CategoryIcon size={14} />}>{category.title}</IconLabel>}
+                  right={
+                    <Badge tone={categoryGranted > 0 ? 'accent' : 'default'}>
+                      {categoryGranted}/{category.permissions.length}
+                    </Badge>
+                  }
+                >
+                  <div className="grid grid-cols-2 gap-2">
+                    {category.permissions.map((perm) => {
+                      const isGranted = hasAll || rank.Permissions.includes(perm.id);
+                      const PermIcon = permissionIcon(perm.id);
+                      return (
+                        <button
+                          key={perm.id}
+                          type="button"
+                          disabled={!isEditingPermissions}
+                          onClick={() => handleTogglePermission(rank, perm.id)}
+                          className={cn(
+                            'flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg border text-left transition-colors',
+                            isGranted ? 'bg-accent/[0.08] border-accent/25' : 'bg-black/20 border-white/5',
+                            isEditingPermissions ? 'hover:border-white/15' : 'cursor-default',
+                          )}
+                        >
+                          <span className="flex items-center gap-3 min-w-0">
+                            <span
+                              className={cn(
+                                'w-8 h-8 rounded-lg border flex items-center justify-center shrink-0 transition-colors',
+                                isGranted
+                                  ? 'bg-accent/15 border-accent/25 text-accent'
+                                  : 'bg-white/5 border-white/5 text-primary/50',
+                              )}
+                            >
+                              <PermIcon size={15} />
+                            </span>
+                            <span className="min-w-0">
+                              <span
+                                className={cn('block text-base truncate', isGranted ? 'text-primary' : 'text-primary/70')}
+                              >
+                                {perm.label}
+                              </span>
+                              <span className="block font-mono text-xs text-primary/50 truncate">{perm.id}</span>
+                            </span>
+                          </span>
+                          <Switch checked={isGranted} muted={!isEditingPermissions} />
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Section>
+              );
+            })
+          )}
+        </div>
+      </>
+    );
+  };
+
+  const renderAdminCard = (admin: AdminUser) => {
+    const details = detailsOf(admin);
+    const isRole = admin.Identifier.startsWith('role:');
+    const typeMeta = ID_TYPES.find((type) => type.id === idTypeOf(admin.Identifier));
+    const isActive = drawer?.kind === 'admin' && drawer.id === admin.Identifier;
+    const expiry = admin.IsTemp ? formatExpiry(admin.Expires) : null;
+
+    return (
+      <div key={admin.Identifier} className="group relative">
+        <button
+          type="button"
+          onClick={() => setDrawer({ kind: 'admin', id: admin.Identifier })}
+          className={cn(
+            'relative w-full flex items-center gap-3 text-left rounded-xl border px-3 py-3 transition-all duration-200 overflow-hidden',
+            isActive
+              ? 'bg-accent/10 border-accent/30'
+              : 'bg-white/[0.02] border-white/5 hover:bg-white/[0.05] hover:border-white/10',
+          )}
+        >
+          {admin.IsTemp && <span className="absolute inset-y-0 left-0 w-[3px] bg-warning" />}
+          {renderAdminAvatar(admin, 'w-10 h-10 text-base')}
+
+          <span className="min-w-0 flex-1">
+            <span className={cn('block text-base font-semibold truncate', details.isOnline || isRole ? 'text-primary' : 'text-primary/70')}>
+              {details.displayName}
+            </span>
+            <span className="flex items-center gap-1.5 mt-0.5 text-xs text-primary/50 min-w-0">
+              <span className="shrink-0 flex items-center">
+                <IdTypeIcon type={typeMeta} size={11} />
+              </span>
+              <span className="font-mono truncate">{admin.Identifier.replace(/^[a-z]+:/, '')}</span>
+            </span>
+          </span>
+
+          <span className="shrink-0 flex flex-col items-end gap-1">
+            {expiry ? (
+              <span className="inline-flex items-center gap-1 font-mono text-xs text-warning" title={expiry}>
+                <Hourglass size={11} />
+                {expiry.split(' ')[0]}
+              </span>
+            ) : (
+              !isRole && (
+                <span className="inline-flex items-center gap-1 font-mono text-xs text-primary/50">
+                  <Timer size={11} />
+                  {formatDutyTime(admin.DutySeconds)}
+                </span>
+              )
+            )}
+            {isRole && (
+              <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-[#8b93ff]">
+                {t('ui.pages.access.management.methods.discord_role')}
+              </span>
+            )}
+          </span>
+          <ChevronRight
+            size={15}
+            className="shrink-0 -mr-1 text-primary/20 group-hover:opacity-0 transition-all"
+          />
+        </button>
+        <button
+          type="button"
+          title={t('ui.pages.access.management.edit_name')}
+          onClick={() => handleOpenEditAdmin(admin)}
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 w-7 h-7 flex items-center justify-center rounded-md text-primary/60 hover:text-primary hover:bg-white/10 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-all"
+        >
+          <Pencil size={13} />
+        </button>
+      </div>
+    );
+  };
+
+  const renderRankColumn = (rank: Rank | undefined, columnAdmins: AdminUser[]) => {
+    const color = rankColorOf(rank);
+    const memberCount = rank ? adminCountByRank.get(rank.Id) ?? 0 : columnAdmins.length;
+    const onlineInRank = columnAdmins.filter((admin) => detailsOf(admin).isOnline).length;
+    const coverage = rank && totalPermissions ? Math.round((grantedCount(rank) / totalPermissions) * 100) : 0;
+    const isActive = !!rank && drawer?.kind === 'rank' && drawer.id === rank.Id;
+
+    return (
+      <div
+        key={rank?.Id ?? 'unassigned'}
+        className="flex flex-col rounded-2xl border bg-black/25 overflow-hidden transition-colors"
+        style={{ borderColor: isActive ? withAlpha(color, 0.45) : 'rgba(255,255,255,0.06)' }}
+      >
+        <div
+          className="relative p-4 shrink-0"
+          style={{ background: `linear-gradient(180deg, ${withAlpha(color, 0.14)} 0%, ${withAlpha(color, 0)} 100%)` }}
+        >
+          <div className="absolute inset-x-0 top-0 h-[3px]" style={{ backgroundColor: color }} />
+
+          <div className="flex items-center gap-3">
+            {renderRankIcon(rank, 'w-11 h-11', 20)}
+            <div className="min-w-0 flex-1">
+              <div className="font-rajdhani font-bold text-xl uppercase tracking-wide text-primary leading-none truncate">
+                {rank?.Name ?? t('ui.pages.access.management.unknown_rank')}
+              </div>
+              <div className="flex items-center gap-2.5 mt-1.5 text-sm text-primary/60">
+                <span className="inline-flex items-center gap-1">
+                  <UsersRound size={13} />
+                  {t('ui.pages.access.ranks.admin_count', memberCount)}
+                </span>
+                {onlineInRank > 0 && (
+                  <span className="inline-flex items-center gap-1.5 text-success">
+                    <span className="w-1.5 h-1.5 rounded-full bg-success" />
+                    {t('ui.pages.access.ranks.online_count', onlineInRank)}
+                  </span>
+                )}
+              </div>
+            </div>
+            {rank && <CoverageRing value={coverage} color={color} />}
+          </div>
+
+          {rank && (
+            <div className="flex items-center gap-1.5 mt-4">
+              <button
+                type="button"
+                onClick={() => openRankDrawer(rank)}
+                className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg border py-2 font-rajdhani font-bold uppercase tracking-wider text-sm transition-colors hover:brightness-125"
+                style={{ color, backgroundColor: withAlpha(color, 0.1), borderColor: withAlpha(color, 0.25) }}
+              >
+                <KeyRound size={13} />
+                {t('ui.pages.access.tabs.permissions')}
+              </button>
+              <IconButton
+                className="p-2 border border-white/5 bg-white/[0.03]"
+                title={t('ui.pages.access.management.add')}
+                onClick={() => handleOpenAddAdmin(rank.Id)}
+              >
+                <UserPlus size={15} />
+              </IconButton>
+              <IconButton
+                className="p-2 border border-white/5 bg-white/[0.03]"
+                title={t('ui.pages.access.ranks.edit_title')}
+                onClick={() => handleOpenEditRank(rank)}
+              >
+                <Pencil size={15} />
+              </IconButton>
+              <IconButton
+                tone="danger"
+                className="p-2 border border-white/5 bg-white/[0.03]"
+                title={t('ui.pages.access.ranks.delete_rank_title')}
+                onClick={() => setRankToDelete(rank)}
+              >
+                <Trash2 size={15} />
+              </IconButton>
+            </div>
+          )}
+        </div>
+
+        <div className="max-h-[360px] overflow-y-auto custom-scrollbar px-3 pb-3 space-y-2">
+          {columnAdmins.length > 0 ? (
+            <>
+              {columnAdmins.map(renderAdminCard)}
+              {rank && (
+                <button
+                  type="button"
+                  onClick={() => handleOpenAddAdmin(rank.Id)}
+                  className="w-full rounded-xl border border-dashed border-white/[0.07] hover:border-white/20 py-2.5 flex items-center justify-center gap-2 text-sm text-primary/40 hover:text-primary/80 transition-colors"
+                >
+                  <Plus size={14} />
+                  {t('ui.pages.access.management.add')}
+                </button>
+              )}
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => handleOpenAddAdmin(rank?.Id)}
+              className="w-full rounded-xl border border-dashed border-white/10 hover:border-white/20 hover:bg-white/[0.02] py-6 flex flex-col items-center gap-2 text-primary/50 hover:text-primary/80 transition-colors"
+            >
+              <UserPlus size={18} />
+              <span className="text-sm">{t('ui.pages.access.ranks.empty_column')}</span>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderBoard = () => (
+    <div className="h-full overflow-y-auto custom-scrollbar pb-2">
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] items-start gap-4">
+        {boardColumns.length === 0 ? (
+          <Panel className="col-span-full">
+            <EmptyState icon={<UsersRound size={44} />} title={t('ui.pages.access.management.no_results')} />
+          </Panel>
+        ) : (
+          boardColumns.map((column) => renderRankColumn(column.rank, column.admins))
+        )}
+        {!isFiltering && (
+          <button
+            type="button"
+            onClick={handleOpenAddRank}
+            className="min-h-[200px] rounded-2xl border-2 border-dashed border-white/10 hover:border-accent/40 hover:bg-accent/[0.04] text-primary/50 hover:text-accent flex flex-col items-center justify-center gap-3 transition-colors"
+          >
+            <span className="w-11 h-11 rounded-xl border border-white/10 bg-white/5 flex items-center justify-center">
+              <Plus size={20} />
+            </span>
+            <span className="font-rajdhani font-bold uppercase tracking-wider">{t('ui.pages.access.ranks.add_new')}</span>
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderIdentifierInput = () => {
+    if (idType === 'CHARACTER') {
+      const query = pickerSearch.toLowerCase();
+      const results = (dbPlayers.length > 0 ? dbPlayers : players)
+        .filter((p) => p.Name.toLowerCase().includes(query) || p.CitizenId?.toLowerCase().includes(query))
+        .slice(0, 30);
+      const selectedName = dbPlayers.find(
+        (p) => p.CitizenId === adminForm.Identifier || p.License === adminForm.Identifier,
+      )?.Name;
+
+      return (
+        <div className="space-y-2">
+          <SearchField
+            value={pickerSearch}
+            onChange={setPickerSearch}
+            placeholder={t('ui.pages.access.management.search_player')}
+          />
+          <div className="max-h-48 overflow-y-auto custom-scrollbar rounded-lg border border-white/5 bg-black/20 divide-y divide-white/5">
+            {results.length === 0 ? (
+              <p className="py-6 text-center text-sm text-primary/60">{t('ui.pages.access.management.no_players')}</p>
+            ) : (
+              results.map((p) => {
+                const isSelected = adminForm.CharacterId === p.CitizenId || adminForm.Identifier === p.License;
+                return (
+                  <div
+                    key={p.CitizenId || p.ServerId}
+                    className={cn('flex items-center justify-between gap-3 px-3 py-2', isSelected && 'bg-accent/10')}
+                  >
+                    <span className="min-w-0">
+                      <span
+                        className={cn('block text-base font-semibold truncate', isSelected ? 'text-accent' : 'text-primary')}
+                      >
+                        {p.Name}
+                      </span>
+                      <span className="block font-mono text-xs text-primary/60 truncate">{p.CitizenId || '-'}</span>
+                    </span>
+                    <span className="flex gap-1 shrink-0">
+                      {p.CitizenId && (
+                        <Button
+                          className="px-2.5 py-1 text-xs"
+                          variant={adminForm.Identifier === p.CitizenId ? 'primary' : 'default'}
+                          title={t('ui.pages.access.management.add_by_cid')}
+                          onClick={() =>
+                            setAdminForm((prev) => ({ ...prev, Identifier: p.CitizenId, CharacterId: p.CitizenId }))
+                          }
+                        >
+                          CID
+                        </Button>
+                      )}
+                      {p.License && (
+                        <Button
+                          className="px-2.5 py-1 text-xs"
+                          variant={adminForm.Identifier === p.License ? 'primary' : 'default'}
+                          title={t('ui.pages.access.management.add_by_license')}
+                          onClick={() =>
+                            setAdminForm((prev) => ({ ...prev, Identifier: p.License, CharacterId: p.CitizenId || '' }))
+                          }
+                        >
+                          {t('ui.pages.access.management.methods.license')}
+                        </Button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          {adminForm.Identifier && (
+            <p className="text-sm text-primary/70 truncate">
+              {t('ui.pages.access.management.selected')}{' '}
+              <span className="text-primary font-semibold">{selectedName || adminForm.Identifier}</span>
+            </p>
+          )}
+        </div>
+      );
+    }
+
+    if (idType === 'DISCORD ROLE') {
+      const query = pickerSearch.trim();
+      const selectedRoles = adminForm.DiscordRoles || [];
+      const results = discordRoles.filter((r) => r.name.toLowerCase().includes(query.toLowerCase()));
+
+      return (
+        <div className="space-y-2">
+          <SearchField
+            value={pickerSearch}
+            onChange={setPickerSearch}
+            placeholder={t('ui.pages.access.management.search_role')}
+          />
+          {selectedRoles.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {selectedRoles.map((roleId) => {
+                const role = discordRoles.find((r) => r.id === roleId);
+                return (
+                  <span
+                    key={roleId}
+                    className="flex items-center gap-1.5 pl-2 pr-1 py-1 rounded-md bg-white/5 border border-white/10 text-sm text-primary"
+                    style={{ borderLeft: `3px solid ${roleColorOf(role) ?? 'rgb(var(--accent))'}` }}
+                  >
+                    {role?.name || roleId}
+                    <IconButton tone="danger" className="p-0.5" onClick={() => toggleDiscordRole(roleId)}>
+                      <i className="fa-solid fa-xmark text-xs"></i>
+                    </IconButton>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          <div className="max-h-48 overflow-y-auto custom-scrollbar rounded-lg border border-white/5 bg-black/20 p-1">
+            {discordRoles.length === 0 ? (
+              <div className="p-4 text-center">
+                <i className="fa-brands fa-discord text-xl mb-2 text-warning/70"></i>
+                <p className="font-rajdhani font-bold uppercase tracking-wider text-primary/90">
+                  {t('ui.pages.access.management.no_discord_roles')}
+                </p>
+                <p className="text-sm text-primary/60 mt-1">{t('ui.pages.access.management.discord_not_configured')}</p>
+              </div>
+            ) : (
+              results.map((role) => {
+                const isSelected = selectedRoles.includes(role.id);
+                return (
+                  <button
+                    key={role.id}
+                    type="button"
+                    onClick={() => toggleDiscordRole(role.id)}
+                    className={cn(
+                      'w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-md text-left text-base transition-colors',
+                      isSelected ? 'bg-accent/10 text-accent' : 'text-primary hover:bg-white/5',
+                    )}
+                  >
+                    <span className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        className="w-2.5 h-2.5 rounded-full shrink-0"
+                        style={{ backgroundColor: roleColorOf(role) ?? 'rgb(var(--accent))' }}
+                      />
+                      <span className="truncate">{role.name}</span>
+                    </span>
+                    {isSelected && <Check size={13} className="shrink-0" />}
+                  </button>
+                );
+              })
+            )}
+            {query && !discordRoles.some((r) => r.id === query) && (
+              <button
+                type="button"
+                onClick={() => toggleDiscordRole(query)}
+                className="w-full flex items-center gap-2 px-2.5 py-2 mt-1 rounded-md text-left text-sm bg-accent/10 hover:bg-accent/15 text-accent transition-colors"
+              >
+                <Plus size={13} className="shrink-0" />
+                {t('ui.pages.access.management.use_custom_role_id')}
+                <span className="font-mono text-primary truncate">{query}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const typeMeta = ID_TYPES.find((type) => type.id === idType);
+    const hint =
+      idType === 'STEAM'
+        ? t('ui.pages.access.management.hint_steam')
+        : idType === 'DISCORD'
+          ? t('ui.pages.access.management.hint_discord')
+          : t('ui.pages.access.management.hint_license');
+
+    return (
+      <div>
+        <input
+          type="text"
+          value={adminForm.Identifier || ''}
+          onChange={(e) => setAdminForm({ ...adminForm, Identifier: e.target.value })}
+          onBlur={(e) => {
+            if (idType !== 'STEAM') return;
+            const value = formatSteamIdentifier(e.target.value);
+            setAdminForm((prev) => ({ ...prev, Identifier: value }));
+          }}
+          className={cn(inputClass, 'font-mono text-sm')}
+          placeholder={t(
+            'ui.pages.access.management.enter_identifier',
+            t(`ui.pages.access.management.methods.${typeMeta?.key}`).toLowerCase(),
+          )}
+        />
+        <p className="text-sm text-primary/60 mt-2">{hint}</p>
+        {idType === 'STEAM' && (
+          <p className="text-sm text-warning/80 mt-1">{t('ui.pages.access.management.hint_steam_vanity')}</p>
+        )}
+      </div>
+    );
+  };
+
+  const renderAdminModal = () => {
+    const editMeta = adminToEdit ? ID_TYPES.find((type) => type.id === idTypeOf(adminToEdit.Identifier)) : null;
+
+    return (
+      <Modal
+        title={adminToEdit ? t('ui.pages.access.management.edit_title') : t('ui.pages.access.management.add_title')}
+        subtitle={t('ui.pages.access.management.auth_subtitle')}
+        width="max-w-[560px]"
+        media={
+          <IconTile className="w-10 h-10 rounded-lg">{adminToEdit ? <Pencil size={16} /> : <UserPlus size={16} />}</IconTile>
+        }
+        onClose={closeAdminModal}
+        footer={
+          <>
+            <Button variant="ghost" onClick={closeAdminModal}>
+              {t('common.cancel')}
+            </Button>
+            <Button
+              variant="primary"
+              icon={<Check size={14} />}
+              disabled={!adminForm.Identifier || !adminForm.RankId}
+              onClick={handleSaveAdmin}
+            >
+              {t('ui.pages.access.management.confirm')}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-5">
+          {adminToEdit ? (
+            <div>
+              <Label>{t('ui.pages.access.management.identifier')}</Label>
+              <div className="flex items-center gap-3 rounded-lg bg-black/30 border border-white/5 px-3 py-2.5">
+                <span className="text-accent flex items-center">
+                  <IdTypeIcon type={editMeta ?? undefined} size={15} />
+                </span>
+                <span className="font-mono text-sm text-primary truncate flex-1">{adminToEdit.Identifier}</span>
+                {editMeta && <Badge>{t(`ui.pages.access.management.methods.${editMeta.key}`)}</Badge>}
+              </div>
+              <p className="text-sm text-primary/60 mt-2">{t('ui.pages.access.management.identifier_locked')}</p>
+            </div>
+          ) : (
+            <>
+              <div>
+                <Label>{t('ui.pages.access.management.type')}</Label>
+                <div className="grid grid-cols-5 gap-1.5">
+                  {ID_TYPES.map((type) => (
+                    <button
+                      key={type.id}
+                      type="button"
+                      onClick={() => selectIdType(type.id)}
+                      className={cn(
+                        'flex flex-col items-center gap-1.5 rounded-lg border px-1.5 py-2.5 font-rajdhani font-bold uppercase tracking-wide text-xs text-center leading-tight transition-colors',
+                        idType === type.id
+                          ? 'bg-accent/10 border-accent/40 text-accent'
+                          : 'bg-black/20 border-white/5 text-primary/70 hover:text-primary hover:border-white/10',
+                      )}
+                    >
+                      <span className="h-5 flex items-center">
+                        <IdTypeIcon type={type} size={17} />
+                      </span>
+                      <span>{t(`ui.pages.access.management.methods.${type.key}`)}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <Label>{t('ui.pages.access.management.identifier')}</Label>
+                {renderIdentifierInput()}
+              </div>
+            </>
+          )}
+
+          <div>
+            <Label>
+              <span className="flex items-center justify-between">
+                {t('ui.pages.access.management.name')}
+                <span className="font-normal normal-case tracking-normal text-primary/50">
+                  {t('ui.pages.access.management.optional')}
+                </span>
+              </span>
+            </Label>
+            <input
+              type="text"
+              maxLength={64}
+              value={adminForm.Name || ''}
+              onChange={(e) => setAdminForm({ ...adminForm, Name: e.target.value })}
+              className={cn(inputClass, 'text-sm')}
+              placeholder={
+                adminToEdit ? detailsOf(adminToEdit).displayName : t('ui.pages.access.management.name_placeholder')
+              }
+            />
+          </div>
+
+          <div>
+            <Label>{t('ui.pages.access.management.authority_level')}</Label>
+            <Select
+              value={adminForm.RankId || ''}
+              onChange={(RankId) => setAdminForm((prev) => ({ ...prev, RankId }))}
+              triggerClassName="bg-black/30 border border-white/5 hover:border-white/10 rounded-lg px-3 py-2.5 text-base text-primary"
+              options={ranks.map((rank) => ({
+                id: rank.Id,
+                label: `${rank.Name} (${grantedCount(rank)}/${totalPermissions})`,
+              }))}
+            />
+          </div>
+
+          <div className="rounded-xl border border-white/5 bg-black/20">
+            <button
+              type="button"
+              onClick={toggleTemporary}
+              className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+            >
+              <span className="flex items-center gap-3 min-w-0">
+                <IconTile tone={adminForm.IsTemp ? 'warning' : 'default'} className="w-9 h-9 rounded-lg">
+                  {adminForm.IsTemp ? <Hourglass size={16} /> : <InfinityIcon size={16} />}
+                </IconTile>
+                <span className="min-w-0">
+                  <span className="block text-base font-semibold text-primary">
+                    {t('ui.pages.access.management.temp_status')}
+                  </span>
+                  <span className="block text-sm text-primary/70">
+                    {adminForm.IsTemp
+                      ? t('ui.pages.access.management.temp_status_desc')
+                      : t('ui.pages.access.management.perm_registry_active')}
+                  </span>
+                </span>
+              </span>
+              <Switch checked={!!adminForm.IsTemp} tone="warning" />
+            </button>
+            {adminForm.IsTemp && (
+              <div className="px-4 pb-4">
+                <DateTimePicker
+                  value={normalizeExpiry(adminForm.Expires)}
+                  onChange={(value) => setAdminForm({ ...adminForm, Expires: value })}
+                />
+              </div>
+            )}
+          </div>
+
+          <div>
+            <Label>
+              <span className="flex items-center justify-between">
+                {t('ui.pages.access.management.webhook')}
+                <span className="font-normal normal-case tracking-normal text-primary/50">
+                  {t('ui.pages.access.management.optional')}
+                </span>
+              </span>
+            </Label>
+            <input
+              type="text"
+              value={adminForm.Webhook || ''}
+              onChange={(e) => setAdminForm({ ...adminForm, Webhook: e.target.value })}
+              className={cn(inputClass, 'text-sm')}
+              placeholder={t('ui.pages.access.management.webhook_placeholder')}
+            />
+            <p className="font-mono text-xs font-bold uppercase tracking-widest text-primary/60 mt-3 mb-2">
+              {t('ui.pages.access.management.events')}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {WEBHOOK_EVENTS.map((event) => {
+                const isSelected = (adminForm.WebhookEvents || ['all']).includes(event);
+                const EventIcon = WEBHOOK_EVENT_ICONS[event] ?? Layers;
+                return (
+                  <button
+                    key={event}
+                    type="button"
+                    onClick={() => toggleWebhookEvent(event)}
+                    className={cn(
+                      'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border font-mono text-xs font-bold uppercase tracking-wider transition-colors',
+                      isSelected
+                        ? 'bg-accent/10 border-accent/30 text-accent'
+                        : 'bg-white/5 border-white/5 text-primary/70 hover:text-primary hover:border-white/10',
+                    )}
+                  >
+                    <EventIcon size={12} />
+                    {event}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {duplicateAdminError && (
+            <div className="flex items-center gap-2 text-sm text-danger bg-danger/10 border border-danger/30 rounded-lg py-2.5 px-3">
+              <TriangleAlert size={14} className="shrink-0" />
+              <span>{t('ui.pages.access.management.already_admin')}</span>
+            </div>
+          )}
+        </div>
+      </Modal>
+    );
   };
 
   return (
-    <div className="flex flex-col h-full w-full text-primary">
-      <div className="px-6 pt-6 pb-4 flex-shrink-0 border-b border-border/50">
-        <div className="flex items-start justify-between gap-4 flex-wrap mb-5">
-          <div className="flex items-center gap-3.5">
-            <div className="w-11 h-11 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center text-accent">
-              <i className="fa-solid fa-shield-halved text-xl"></i>
+    <div className="relative flex flex-col h-full w-full">
+      <div className="p-6 pb-0 shrink-0">
+        <div className="flex items-center justify-between gap-4 mb-6">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-xl bg-accent/10 border border-accent/30 flex items-center justify-center text-accent relative overflow-hidden">
+              <div className="absolute inset-0 bg-accent/20"></div>
+              <i className="fa-solid fa-shield-halved text-2xl relative z-10"></i>
             </div>
             <div>
-              <h2 className="text-xl font-semibold text-primary leading-tight">
+              <h2 className="text-2xl font-rajdhani font-bold text-primary leading-none tracking-wide uppercase">
                 {t('ui.pages.access.ranks.access_control')}
               </h2>
-              <p className="text-sm text-muted mt-0.5">{t('ui.pages.access.ranks.ranks_management_subtitle')}</p>
+              <p className="text-xs font-mono text-primary/80 mt-1.5 uppercase tracking-widest font-bold">
+                {t('ui.pages.access.ranks.ranks_management_subtitle')}
+              </p>
             </div>
           </div>
 
-          {/* Live stat row */}
-          <div className="flex items-stretch gap-2.5">
-            {stats.map((s) => (
-              <div
-                key={s.label}
-                className="flex items-center gap-3 bg-bg-secondary/40 border border-border/50 rounded-xl px-4 py-2.5 min-w-[104px]"
-              >
-                <i className={`${s.icon} ${s.tone} text-base`}></i>
-                <div className="flex flex-col leading-none">
-                  <span className="text-primary font-semibold text-lg">{s.value}</span>
-                  <span className="text-[11px] text-muted mt-1">{s.label}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Sub Tabs */}
-        <div className="flex items-center justify-between gap-4 flex-wrap">
-          <SubTabs
-            tabs={[
-              {
-                id: 'Admins',
-                label: t('ui.pages.access.tabs.admins'),
-                icon: 'fa-solid fa-user-shield',
-                count: admins.length,
-              },
-              {
-                id: 'Permissions',
-                label: t('ui.pages.access.tabs.permissions'),
-                icon: 'fa-solid fa-key',
-                count: ranks.length,
-              },
-            ]}
-            activeTab={activeTab}
-            onChange={setActiveTab}
-          />
-
-          {/* Discord Logs Toggle */}
-          <div className="flex items-center gap-3 bg-bg-secondary/40 border border-border/50 rounded-xl px-4 py-2.5">
-            <i className={`fa-brands fa-discord text-base ${discordLogsEnabled ? 'text-accent' : 'text-muted'}`}></i>
-            <span className="text-sm text-primary font-medium whitespace-nowrap">
+          <button
+            type="button"
+            onClick={handleToggleDiscordLogs}
+            className="flex items-center gap-3 rounded-lg bg-black/30 border border-white/5 hover:border-white/10 px-3.5 py-2.5 transition-colors"
+          >
+            <i
+              className={cn('fa-brands fa-discord text-base', discordLogsEnabled ? 'text-[#5865F2]' : 'text-primary/50')}
+            ></i>
+            <span className="font-mono text-xs font-bold uppercase tracking-widest text-primary/80">
               {t('ui.pages.access.discord_logs')}
             </span>
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={discordLogsEnabled}
-                onChange={handleToggleDiscordLogs}
-              />
-              <div className="w-11 h-6 bg-black/40 border border-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent peer-checked:border-accent"></div>
-            </label>
+            <Switch checked={discordLogsEnabled} />
+          </button>
+        </div>
+
+        <Toolbar className="border-b border-white/10 pb-4 mb-5">
+          <Segmented
+            value={adminStatus}
+            onChange={setAdminStatus}
+            options={[
+              { id: 'all', label: t('ui.pages.access.management.filter_all'), count: admins.length },
+              { id: 'online', label: t('ui.pages.access.management.filter_online'), count: onlineCount },
+              { id: 'temporary', label: t('ui.pages.access.management.filter_temporary'), count: tempCount },
+            ]}
+          />
+          <SearchField
+            className="w-80"
+            value={adminSearch}
+            onChange={setAdminSearch}
+            placeholder={t('ui.pages.access.management.search')}
+          />
+          <Button className="ml-auto" icon={<Plus size={14} />} onClick={handleOpenAddRank}>
+            {t('ui.pages.access.ranks.add_new')}
+          </Button>
+          <Button variant="primary" icon={<UserPlus size={14} />} onClick={() => handleOpenAddAdmin()}>
+            {t('ui.pages.access.management.add')}
+          </Button>
+        </Toolbar>
+      </div>
+
+      <div className="flex-1 min-h-0 px-6 pb-6">{renderBoard()}</div>
+
+      {(drawerAdmin || drawerRank) && (
+        <div className="absolute inset-0 z-40 flex justify-end overflow-hidden">
+          <div className="absolute inset-0 bg-black/60 animate-in fade-in duration-200" onClick={closeDrawer} />
+          <div
+            className={cn(
+              'relative h-full max-w-[85%] bg-sidebar border-l border-white/10 flex flex-col shadow-2xl shadow-black/50 animate-in slide-in-from-right duration-300',
+              drawerRank ? 'w-[680px]' : 'w-[400px]',
+            )}
+          >
+            {drawerRank ? renderPermissionEditor(drawerRank) : drawerAdmin && renderAdminDetail(drawerAdmin)}
           </div>
         </div>
-      </div>
-
-      <div className="flex-1 overflow-hidden p-6">
-        {activeTab === 'Permissions' ? (
-          <div className="h-full flex gap-6">
-            {/* Ranks list */}
-            <div className="w-[38%] max-w-[360px] flex flex-col gap-3">
-              <div className="relative flex-shrink-0">
-                <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-muted text-sm"></i>
-                <input
-                  type="text"
-                  placeholder={t('ui.pages.access.ranks.search')}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-bg-secondary/50 border border-border/50 rounded-xl pl-10 pr-4 py-2.5 text-primary text-sm focus:outline-none focus:border-accent/60 focus:bg-bg-secondary/70 transition-all placeholder:text-muted/70"
-                />
-              </div>
-
-              <button
-                onClick={handleOpenAddRank}
-                className="w-full flex-shrink-0 bg-accent hover:bg-accent/90 text-white px-4 py-2.5 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
-              >
-                <i className="fa-solid fa-plus text-sm"></i>
-                {t('ui.pages.access.ranks.add_new')}
-              </button>
-
-              <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col gap-2 pr-1">
-                {filteredRanks.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-14 text-muted">
-                    <i className="fa-solid fa-shield-halved text-3xl mb-3 opacity-40"></i>
-                    <p className="text-sm">{t('ui.pages.access.ranks.no_results')}</p>
-                  </div>
-                ) : (
-                  filteredRanks.map((rank) => {
-                    const isSelected = selectedRank?.Id === rank.Id;
-                    const hasAll = rank.Permissions.includes('all');
-                    const permCount = hasAll ? allPermissionIds.length : rank.Permissions.length;
-                    const totalPerms = allPermissionIds.length || 1;
-                    const fill = hasAll ? 100 : Math.min(100, Math.round((permCount / totalPerms) * 100));
-                    const tone = rankTone(rank);
-                    return (
-                      <div
-                        key={rank.Id}
-                        onClick={() => {
-                          setSelectedRank(rank);
-                          setIsEditingPermissions(false);
-                        }}
-                        style={
-                          isSelected
-                            ? {
-                                borderColor: `color-mix(in srgb, ${tone.color} 45%, transparent)`,
-                                backgroundColor: `color-mix(in srgb, ${tone.color} 8%, transparent)`,
-                              }
-                            : undefined
-                        }
-                        className={`p-3.5 rounded-xl cursor-pointer transition-colors border flex flex-col gap-3 group ${isSelected ? '' : 'bg-bg-secondary/30 border-border/50 hover:bg-bg-secondary/50 hover:border-border'}`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            className="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center text-base"
-                            style={{
-                              backgroundColor: `color-mix(in srgb, ${tone.color} 14%, transparent)`,
-                              color: tone.color,
-                            }}
-                          >
-                            <i className={`fa-solid ${tone.icon}`}></i>
-                          </div>
-
-                          <div className="flex flex-col flex-1 min-w-0 gap-0.5">
-                            <div
-                              className={`font-semibold text-[15px] leading-tight truncate ${isSelected ? 'text-primary' : 'text-primary/90 group-hover:text-primary'}`}
-                            >
-                              {rank.Name}
-                            </div>
-                            <span className="text-[11px] leading-none" style={{ color: tone.color }}>
-                              {tone.label}
-                            </span>
-                          </div>
-
-                          {/* Permission count (hidden on hover to reveal actions) */}
-                          <div className="shrink-0 group-hover:hidden">
-                            {hasAll ? (
-                              <span className="text-[11px] font-medium text-success bg-success/10 px-2 py-1 rounded-md">
-                                Full
-                              </span>
-                            ) : permCount === 0 ? (
-                              <span className="text-[11px] font-medium text-danger/90 bg-danger/10 px-2 py-1 rounded-md">
-                                {t('ui.pages.access.ranks.no_access')}
-                              </span>
-                            ) : (
-                              <span className="text-[11px] font-mono text-muted bg-bg-secondary/70 border border-border/50 px-2 py-1 rounded-md">
-                                {permCount}/{totalPerms}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Hover actions */}
-                          <div className="hidden group-hover:flex items-center gap-1 shrink-0">
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setSelectedRank(rank);
-                                handleOpenEditRank(rank);
-                              }}
-                              className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-primary hover:bg-bg-secondary transition-colors"
-                            >
-                              <i className="fa-solid fa-pen text-[11px]"></i>
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setRankToDelete(rank);
-                              }}
-                              className="w-7 h-7 rounded-lg flex items-center justify-center text-muted hover:text-danger hover:bg-danger/10 transition-colors"
-                            >
-                              <i className="fa-solid fa-trash text-[11px]"></i>
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Progress track */}
-                        <div className="flex items-center gap-2.5">
-                          <div className="flex-1 h-1.5 rounded-full bg-border/50 overflow-hidden">
-                            <div
-                              className="h-full rounded-full transition-all duration-500"
-                              style={{ width: `${fill}%`, backgroundColor: hasAll ? 'rgb(52,211,153)' : tone.color }}
-                            ></div>
-                          </div>
-                          <span className="text-[11px] font-mono text-muted shrink-0 w-9 text-right">{fill}%</span>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </div>
-
-            {/* Permissions editor */}
-            <div className="flex-1 bg-bg-secondary/30 border border-border/50 rounded-2xl p-6 flex flex-col">
-              {selectedRank ? (
-                <>
-                  <div className="flex items-center justify-between gap-4 mb-6 flex-wrap">
-                    <div className="flex items-center gap-3 min-w-0">
-                      <h2 className="text-xl font-semibold text-primary flex items-center gap-2.5 truncate">
-                        <i className="fa-solid fa-shield-halved text-accent"></i>
-                        {selectedRank.Name}
-                        <button
-                          onClick={() => handleOpenEditRank(selectedRank)}
-                          className="text-muted hover:text-primary transition-colors text-base ml-1"
-                          title={t('ui.pages.access.ranks.edit_title')}
-                        >
-                          <i className="fa-solid fa-pen"></i>
-                        </button>
-                      </h2>
-                      {selectedRank.Permissions.includes('all') ? (
-                        <span className="text-[11px] font-medium text-success bg-success/10 px-2.5 py-1 rounded-full shrink-0">
-                          Full access
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-mono text-accent bg-accent/10 px-2.5 py-1 rounded-full shrink-0">
-                          {selectedRank.Permissions.length}/{allPermissionIds.length}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex gap-2">
-                      {!isEditingPermissions ? (
-                        <>
-                          <button
-                            onClick={() => setIsEditingPermissions(true)}
-                            className="text-sm font-medium bg-accent/15 hover:bg-accent/25 text-accent px-3.5 py-2 rounded-lg transition-colors flex items-center gap-2"
-                          >
-                            <i className="fa-solid fa-pen"></i> {t('ui.pages.access.management.edit_perms')}
-                          </button>
-                          <button
-                            onClick={() => setCopiedPermissions([...selectedRank.Permissions])}
-                            className="text-sm font-medium bg-bg-secondary/70 hover:bg-bg-secondary text-muted hover:text-primary px-3.5 py-2 rounded-lg transition-colors flex items-center gap-2"
-                            title="Copy Configuration"
-                          >
-                            <i className="fa-solid fa-copy"></i> Copy
-                          </button>
-                          {copiedPermissions && (
-                            <button
-                              onClick={() => {
-                                const updatedRank = { ...selectedRank, Permissions: [...copiedPermissions] };
-                                fetchNui('saveRank', updatedRank);
-                                setSelectedRank(updatedRank);
-                                setRanks((prev) => prev.map((r) => (r.Id === selectedRank.Id ? updatedRank : r)));
-                              }}
-                              className="text-sm font-medium bg-bg-secondary/70 hover:bg-bg-secondary text-muted hover:text-primary px-3.5 py-2 rounded-lg transition-colors flex items-center gap-2"
-                              title={t('ui.pages.access.ranks.paste_title')}
-                            >
-                              <i className="fa-solid fa-paste"></i> {t('ui.pages.access.ranks.paste')}
-                            </button>
-                          )}
-                          <button
-                            onClick={() => setRankToDelete(selectedRank)}
-                            className="text-sm font-medium bg-danger/10 hover:bg-danger/20 text-danger px-3.5 py-2 rounded-lg transition-colors flex items-center gap-2"
-                          >
-                            <i className="fa-solid fa-trash"></i> {t('common.delete')}
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => {
-                              allPermissionIds.forEach((perm) => {
-                                if (!selectedRank.Permissions.includes(perm)) {
-                                  handleTogglePermission(selectedRank.Id, perm);
-                                }
-                              });
-                            }}
-                            className="text-sm font-medium bg-bg-secondary/70 hover:bg-bg-secondary text-muted hover:text-primary px-3 py-2 rounded-lg transition-colors"
-                          >
-                            {t('ui.pages.access.management.select_all')}
-                          </button>
-                          <button
-                            onClick={() => {
-                              allPermissionIds.forEach((perm) => {
-                                if (selectedRank.Permissions.includes(perm)) {
-                                  handleTogglePermission(selectedRank.Id, perm);
-                                }
-                              });
-                            }}
-                            className="text-sm font-medium bg-bg-secondary/70 hover:bg-bg-secondary text-muted hover:text-primary px-3 py-2 rounded-lg transition-colors"
-                          >
-                            {t('ui.pages.access.management.deselect_all')}
-                          </button>
-                          <button
-                            onClick={() => setIsEditingPermissions(false)}
-                            className="text-sm font-medium bg-success/15 hover:bg-success/25 text-success px-3.5 py-2 rounded-lg transition-colors flex items-center gap-2 ml-1"
-                          >
-                            <i className="fa-solid fa-check"></i> {t('ui.pages.access.management.done')}
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 mb-4">
-                    <SearchField
-                      className="flex-1"
-                      value={permSearch}
-                      onChange={setPermSearch}
-                      placeholder={t('ui.pages.access.ranks.search_permissions')}
-                    />
-                    <button
-                      onClick={() => setGrantedOnly((value) => !value)}
-                      className={`px-3 py-2 rounded-lg border text-xs transition-colors ${
-                        grantedOnly
-                          ? 'bg-accent/15 border-accent/40 text-accent'
-                          : 'bg-black/30 border-white/5 text-white/50 hover:text-white hover:border-white/10'
-                      }`}
-                    >
-                      {t('ui.pages.access.ranks.granted_only')}
-                    </button>
-                  </div>
-                  <div className="flex-1 overflow-y-auto custom-scrollbar pr-3 flex flex-col gap-6">
-                    {visiblePermissionCategories.length === 0 && (
-                      <p className="py-10 text-center text-sm text-muted">{t('ui.pages.access.ranks.no_permissions_match')}</p>
-                    )}
-                    {visiblePermissionCategories.map((category) => {
-                      const catIds = category.permissions.map((p) => p.id);
-                      const catGranted = catIds.filter((id) => selectedRank.Permissions.includes(id)).length;
-                      return (
-                        <div key={category.title} className="flex flex-col gap-3">
-                          <div className="flex items-center justify-between border-b border-border/50 pb-2">
-                            <h3 className="text-muted font-medium text-sm">{category.title}</h3>
-                            <span
-                              className={`text-[11px] font-mono font-medium px-2 py-0.5 rounded ${catGranted > 0 ? 'text-accent bg-accent/10' : 'text-muted/60'}`}
-                            >
-                              {catGranted}/{catIds.length}
-                            </span>
-                          </div>
-                          <div className="grid grid-cols-2 gap-2.5">
-                            {category.permissions.map((perm) => {
-                              const hasPerm = selectedRank.Permissions.includes(perm.id);
-                              return (
-                                <div
-                                  key={perm.id}
-                                  onClick={() =>
-                                    isEditingPermissions && handleTogglePermission(selectedRank.Id, perm.id)
-                                  }
-                                  className={`px-3.5 py-3 rounded-xl border transition-colors flex items-center justify-between gap-2 group ${
-                                    hasPerm
-                                      ? 'bg-accent/[0.08] border-accent/25'
-                                      : 'bg-bg-secondary/40 border-border/50'
-                                  } ${isEditingPermissions ? 'cursor-pointer hover:border-border' : 'opacity-70'}`}
-                                >
-                                  <div className="flex flex-col min-w-0">
-                                    <span className={`text-sm truncate ${hasPerm ? 'text-primary' : 'text-muted'}`}>
-                                      {perm.label}
-                                    </span>
-                                    <span className="font-mono text-[11px] text-muted/60 truncate">{perm.id}</span>
-                                  </div>
-                                  <div
-                                    className={`w-9 h-5 rounded-full relative transition-colors flex items-center shrink-0 ${hasPerm ? (isEditingPermissions ? 'bg-accent' : 'bg-accent/50') : 'bg-border'} ${isEditingPermissions && !hasPerm ? 'group-hover:bg-border/70' : ''}`}
-                                  >
-                                    <div
-                                      className={`absolute w-4 h-4 rounded-full bg-white transition-transform ${hasPerm ? 'translate-x-[18px]' : 'translate-x-[2px]'}`}
-                                    ></div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              ) : (
-                <div className="h-full flex flex-col items-center justify-center text-muted">
-                  <i className="fa-solid fa-hand-pointer text-4xl mb-4 opacity-50"></i>
-                  <p className="text-lg">{t('ui.pages.access.ranks.select_prompt')}</p>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="h-full flex flex-col gap-5">
-            {/* Admins search & add */}
-            <div className="flex gap-3 shrink-0">
-              <div className="relative flex-1">
-                <i className="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-muted text-sm"></i>
-                <input
-                  type="text"
-                  placeholder={t('ui.pages.access.management.search')}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-bg-secondary/50 border border-border/50 rounded-xl pl-10 pr-4 py-2.5 text-primary text-sm focus:outline-none focus:border-accent/60 focus:bg-bg-secondary/70 transition-all placeholder:text-muted/70"
-                />
-              </div>
-              <Select
-                value={rankFilter}
-                onChange={setRankFilter}
-                triggerClassName="bg-bg-secondary/50 border border-border/50 rounded-xl px-3 py-2.5 text-sm text-primary whitespace-nowrap focus:border-accent/60"
-                options={[
-                  { id: 'all', label: t('ui.pages.access.management.all_ranks') },
-                  ...ranks.map((rank) => ({ id: rank.Id, label: rank.Name })),
-                ]}
-              />
-              <SubTabs
-                tabs={[
-                  { id: 'all', label: t('ui.pages.access.management.filter_all') },
-                  { id: 'online', label: t('ui.pages.access.management.filter_online') },
-                  { id: 'temporary', label: t('ui.pages.access.management.filter_temporary') },
-                ]}
-                activeTab={adminStatus}
-                onChange={setAdminStatus}
-                tabClassName="py-1.5"
-              />
-              <button
-                onClick={handleOpenAddAdmin}
-                className="bg-accent hover:bg-accent/90 text-white px-4 py-2.5 rounded-xl font-medium transition-colors flex items-center gap-2"
-              >
-                <i className="fa-solid fa-user-plus"></i>
-                {t('ui.pages.access.management.add')}
-              </button>
-            </div>
-
-            {/* Admins list */}
-            <div className="flex-1 overflow-y-auto custom-scrollbar pr-1">
-              {filteredAdmins.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-16 text-muted">
-                  <div className="w-16 h-16 rounded-2xl bg-bg-secondary/50 border border-border/50 flex items-center justify-center mb-4">
-                    <i className="fa-solid fa-user-shield text-2xl opacity-40"></i>
-                  </div>
-                  <p className="text-base">{t('ui.pages.access.management.no_results')}</p>
-                  <button
-                    onClick={handleOpenAddAdmin}
-                    className="mt-4 text-sm font-medium text-accent hover:text-accent/80 flex items-center gap-2 transition-colors"
-                  >
-                    <i className="fa-solid fa-user-plus"></i>
-                    {t('ui.pages.access.management.add')}
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5 pb-4">
-                  {filteredAdmins.map((admin) => {
-                    const rank = ranks.find((r) => r.Id === admin.RankId);
-                    const { isOnline, displayName, discordId, steamHex } = resolveAdminDetails(admin);
-                    const steamProfileLink = getSteamProfileLink(steamHex);
-
-                    const roleId = admin.Identifier.startsWith('role:') ? admin.Identifier.replace('role:', '') : null;
-                    const discordRole = roleId ? discordRoles.find((r) => r.id === roleId) : null;
-                    const roleColor =
-                      discordRole && discordRole.color && discordRole.color > 0
-                        ? `#${discordRole.color.toString(16).padStart(6, '0')}`
-                        : null;
-
-                    const tone = rankTone(rank);
-                    const accentColor = roleColor || tone.color;
-
-                    return (
-                      <div
-                        key={admin.Identifier}
-                        className="bg-bg-secondary/30 border border-border/50 rounded-2xl p-5 flex flex-col gap-4 hover:bg-bg-secondary/50 hover:border-border transition-colors group"
-                      >
-                        {/* Header row */}
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            {/* Avatar */}
-                            <div
-                              className="w-12 h-12 rounded-xl flex items-center justify-center font-semibold text-lg relative shrink-0"
-                              style={{
-                                backgroundColor: `color-mix(in srgb, ${accentColor} 14%, transparent)`,
-                                color: accentColor,
-                              }}
-                            >
-                              {admin.AvatarUrl ? (
-                                <img
-                                  src={admin.AvatarUrl}
-                                  alt={displayName}
-                                  className="w-full h-full object-cover rounded-xl"
-                                />
-                              ) : admin.Identifier.startsWith('role:') ? (
-                                <i className="fa-brands fa-discord text-lg"></i>
-                              ) : (
-                                displayName.charAt(0).toUpperCase()
-                              )}
-                              {!admin.Identifier.startsWith('role:') && (
-                                <span
-                                  className={`absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 rounded-full border-2 border-bg-primary ${isOnline ? 'bg-success' : 'bg-muted/50'}`}
-                                  title={isOnline ? 'Online' : 'Offline'}
-                                ></span>
-                              )}
-                            </div>
-
-                            {/* Name & rank */}
-                            <div className="min-w-0 flex flex-col gap-1">
-                              <span
-                                className="text-primary font-semibold text-[15px] leading-tight truncate"
-                                title={displayName}
-                              >
-                                {displayName}
-                              </span>
-                              <div className="flex items-center gap-2">
-                                <span
-                                  className="px-2 py-0.5 rounded-md text-[11px] font-medium"
-                                  style={{
-                                    backgroundColor: `color-mix(in srgb, ${accentColor} 12%, transparent)`,
-                                    color: accentColor,
-                                  }}
-                                >
-                                  {rank?.Name || t('ui.pages.access.management.unknown_rank')}
-                                </span>
-                                {isOnline && !admin.Identifier.startsWith('role:') && (
-                                  <span className="text-[11px] font-medium text-success bg-success/10 px-2 py-0.5 rounded-md">
-                                    Online
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Actions */}
-                          <div className="flex gap-1.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <button
-                              onClick={() => handleOpenEditAdmin(admin)}
-                              className="w-8 h-8 rounded-lg bg-bg-secondary/70 hover:bg-accent/15 text-muted hover:text-accent transition-colors flex items-center justify-center"
-                              title={t('ui.pages.access.management.edit_title')}
-                            >
-                              <i className="fa-solid fa-pen text-xs"></i>
-                            </button>
-                            <button
-                              onClick={() => setAdminToDelete(admin)}
-                              className="w-8 h-8 rounded-lg bg-bg-secondary/70 hover:bg-danger/15 text-muted hover:text-danger transition-colors flex items-center justify-center"
-                              title={t('ui.pages.access.management.revoke_title')}
-                            >
-                              <i className="fa-solid fa-trash text-xs"></i>
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Identity chips */}
-                        <div className="flex flex-col gap-1.5">
-                          {/* Discord */}
-                          {discordId &&
-                          discordId !== 'Not Linked' &&
-                          discordId !== 'unknown' &&
-                          discordId.trim() !== '' ? (
-                            <div
-                              onClick={() => handleCopy(discordId, `${admin.Identifier}-discord`)}
-                              className="flex items-center justify-between bg-bg-secondary/40 hover:bg-[#5865F2]/10 border border-border/50 hover:border-[#5865F2]/40 p-2.5 rounded-xl cursor-pointer transition-colors group/chip"
-                              title={t('ui.pages.access.management.copy_discord')}
-                            >
-                              <span className="flex items-center gap-2.5 min-w-0">
-                                <div className="w-6 h-6 rounded-md bg-[#5865F2]/12 flex items-center justify-center text-[#5865F2] shrink-0">
-                                  <i className="fa-brands fa-discord text-xs"></i>
-                                </div>
-                                <span className="text-xs text-muted group-hover/chip:text-primary transition-colors truncate">
-                                  {discordId}
-                                </span>
-                              </span>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                <span className="text-[11px] text-muted/70">Discord</span>
-                                <i
-                                  className={`text-[11px] transition-colors ${copiedId === `${admin.Identifier}-discord` ? 'fa-solid fa-check text-success' : 'fa-regular fa-copy text-muted/70 group-hover/chip:text-[#5865F2]'}`}
-                                ></i>
-                              </div>
-                            </div>
-                          ) : null}
-
-                          {/* Steam */}
-                          {steamHex && steamHex !== 'Not Linked' && steamHex !== 'unknown' && steamHex.trim() !== '' ? (
-                            <div className="flex items-center justify-between bg-bg-secondary/40 hover:border-[#66c0f4]/40 border border-border/50 p-2.5 rounded-xl transition-colors group/chip">
-                              <div
-                                onClick={() => handleCopy(steamHex, `${admin.Identifier}-steam`)}
-                                className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer"
-                                title={t('ui.pages.access.management.copy_steam')}
-                              >
-                                <div className="w-6 h-6 rounded-md bg-[#66c0f4]/12 flex items-center justify-center text-[#66c0f4] shrink-0">
-                                  <i className="fa-brands fa-steam text-xs"></i>
-                                </div>
-                                <span className="text-xs text-muted group-hover/chip:text-primary transition-colors truncate">
-                                  {steamHex}
-                                </span>
-                              </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                {steamProfileLink && (
-                                  <button
-                                    onClick={() => openExternalUrl(steamProfileLink)}
-                                    className="w-5 h-5 rounded hover:bg-[#66c0f4]/20 text-[#66c0f4]/70 hover:text-[#66c0f4] flex items-center justify-center transition-colors"
-                                    title={t('ui.pages.access.management.open_steam')}
-                                  >
-                                    <i className="fa-solid fa-arrow-up-right-from-square text-[10px]"></i>
-                                  </button>
-                                )}
-                                <div
-                                  onClick={() => handleCopy(steamHex, `${admin.Identifier}-steam`)}
-                                  className="flex items-center gap-1.5 cursor-pointer"
-                                >
-                                  <span className="text-[11px] text-muted/70">Steam</span>
-                                  <i
-                                    className={`text-[11px] transition-colors ${copiedId === `${admin.Identifier}-steam` ? 'fa-solid fa-check text-success' : 'fa-regular fa-copy text-muted/70 group-hover/chip:text-[#66c0f4]'}`}
-                                  ></i>
-                                </div>
-                              </div>
-                            </div>
-                          ) : null}
-
-                          {/* Identifier */}
-                          <div
-                            onClick={() => handleCopy(admin.Identifier, `${admin.Identifier}-ident`)}
-                            className="flex items-center justify-between bg-bg-secondary/40 hover:bg-accent/[0.06] border border-border/50 hover:border-accent/30 p-2.5 rounded-xl cursor-pointer transition-colors group/chip"
-                            title={t('ui.pages.access.management.copy_identifier')}
-                          >
-                            <span className="flex items-center gap-2.5 min-w-0">
-                              <div className="w-6 h-6 rounded-md bg-accent/12 flex items-center justify-center text-accent shrink-0">
-                                <i
-                                  className={`fa-solid ${admin.Identifier.startsWith('role:') ? 'fa-users-gear' : 'fa-key'} text-[11px]`}
-                                ></i>
-                              </div>
-                              <span className="font-mono text-[11px] text-muted group-hover/chip:text-primary transition-colors truncate">
-                                {admin.Identifier}
-                              </span>
-                            </span>
-                            <div className="flex items-center gap-1.5 shrink-0">
-                              <span className="text-[11px] text-muted/70">Identifier</span>
-                              <i
-                                className={`text-[11px] transition-colors ${copiedId === `${admin.Identifier}-ident` ? 'fa-solid fa-check text-success' : 'fa-regular fa-copy text-muted/70 group-hover/chip:text-accent'}`}
-                              ></i>
-                            </div>
-                          </div>
-
-                          {/* Duty hours */}
-                          {!admin.Identifier.startsWith('role:') && (
-                            <div className="flex items-center justify-between bg-bg-secondary/40 border border-border/50 p-2.5 rounded-xl">
-                              <span className="flex items-center gap-2.5 min-w-0">
-                                <div className="w-6 h-6 rounded-md bg-emerald-500/12 flex items-center justify-center text-emerald-400 shrink-0">
-                                  <i className="fa-regular fa-clock text-[11px]"></i>
-                                </div>
-                                <span className="text-xs text-muted truncate">{formatDutyTime(admin.DutySeconds)}</span>
-                              </span>
-                              <span className="text-[11px] text-muted/70 shrink-0">Duty Time</span>
-                            </div>
-                          )}
-
-                          {/* Expiration */}
-                          {admin.IsTemp && admin.Expires && (
-                            <div className="bg-warning/[0.07] border border-warning/20 rounded-xl p-2.5 flex items-center justify-between">
-                              <div className="flex items-center gap-2 text-warning text-xs font-medium">
-                                <i className="fa-regular fa-clock"></i>
-                                <span>{t('ui.pages.access.management.temp_staff_access')}</span>
-                              </div>
-                              <span className="text-[11px] font-mono text-warning/90 bg-warning/10 px-2 py-0.5 rounded-md">
-                                {(function () {
-                                  const exp = admin.Expires;
-                                  if (typeof exp === 'number') {
-                                    const d = new Date(exp * 1000);
-                                    return `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getFullYear()}`;
-                                  }
-                                  if (exp && exp.day) {
-                                    return `${exp.day.toString().padStart(2, '0')}/${exp.month.toString().padStart(2, '0')}/${exp.year}`;
-                                  }
-                                  return 'Unknown';
-                                })()}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Granted permissions preview */}
-                        {rank && (
-                          <div className="mt-auto pt-3.5 border-t border-border/40">
-                            <span className="text-[11px] font-medium text-muted mb-2 flex items-center gap-1.5">
-                              <i className="fa-solid fa-key text-[10px] text-accent/60"></i>
-                              {t('ui.pages.access.ranks.granted_permissions')}
-                            </span>
-                            <div className="flex flex-wrap gap-1">
-                              {rank.Permissions.includes('all') ? (
-                                <span className="bg-success/10 text-success text-[11px] font-medium px-2 py-0.5 rounded-md">
-                                  Full access (*)
-                                </span>
-                              ) : rank.Permissions.length === 0 ? (
-                                <span className="bg-danger/10 text-danger text-[11px] font-medium px-2 py-0.5 rounded-md">
-                                  {t('ui.pages.access.ranks.no_access')}
-                                </span>
-                              ) : (
-                                <>
-                                  {rank.Permissions.slice(0, 4).map((perm) => (
-                                    <span
-                                      key={perm}
-                                      className="bg-accent/[0.08] text-accent text-[11px] px-1.5 py-0.5 rounded-md truncate max-w-[130px]"
-                                      title={perm}
-                                    >
-                                      {perm}
-                                    </span>
-                                  ))}
-                                  {rank.Permissions.length > 4 && (
-                                    <span
-                                      className="bg-bg-secondary/70 text-muted border border-border/50 text-[11px] px-1.5 py-0.5 rounded-md cursor-help"
-                                      title={rank.Permissions.slice(4).join(', ')}
-                                    >
-                                      +{rank.Permissions.length - 4} more
-                                    </span>
-                                  )}
-                                </>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
+      )}
 
       {(isAddRankModalOpen || rankToEdit) && (
-        <div className="absolute inset-0 bg-black/70 z-50 flex items-center justify-center p-6">
-          <div className="bg-bg-primary border border-border rounded-2xl w-full max-w-md overflow-hidden flex flex-col">
-            {/* Header */}
-            <div className="px-6 py-5 border-b border-border/60 flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center text-accent">
-                  <i className={`fa-solid ${rankToEdit ? 'fa-pen' : 'fa-plus'} text-base`}></i>
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-primary leading-none">
-                    {rankToEdit ? t('ui.pages.access.ranks.modify') : t('ui.pages.access.ranks.register')}
-                  </h2>
-                  <p className="text-sm text-muted mt-1.5">{t('ui.pages.access.ranks.authority_config')}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setIsAddRankModalOpen(false);
-                  setRankToEdit(null);
-                }}
-                className="w-8 h-8 rounded-lg hover:bg-bg-secondary text-muted hover:text-primary transition-colors flex items-center justify-center"
-              >
-                <i className="fa-solid fa-xmark text-sm"></i>
-              </button>
-            </div>
-
-            {/* Body */}
-            <div className="p-6 space-y-5">
-              <div>
-                <label className="block text-sm font-medium text-muted mb-2">
-                  {t('ui.pages.access.ranks.id_label')}
-                </label>
-                <div className="relative">
-                  <i className="fa-solid fa-hashtag absolute left-4 top-1/2 -translate-y-1/2 text-muted text-sm"></i>
-                  <input
-                    type="text"
-                    value={rankForm.Id || ''}
-                    onChange={(e) => setRankForm({ ...rankForm, Id: e.target.value })}
-                    disabled={!!rankToEdit}
-                    className="w-full bg-bg-secondary/50 border border-border/60 rounded-xl pl-11 pr-4 py-3 text-primary font-mono text-sm focus:outline-none focus:border-accent transition-colors placeholder:text-muted/50 disabled:opacity-50"
-                    placeholder={t('ui.pages.access.ranks.id_placeholder')}
-                  />
-                </div>
-                {!rankToEdit && <p className="text-[11px] text-muted mt-2">{t('ui.pages.access.ranks.id_note')}</p>}
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-muted mb-2">
-                  {t('ui.pages.access.ranks.name_label')}
-                </label>
-                <div className="relative">
-                  <i className="fa-solid fa-signature absolute left-4 top-1/2 -translate-y-1/2 text-muted text-sm"></i>
-                  <input
-                    type="text"
-                    value={rankForm.Name || ''}
-                    onChange={(e) => setRankForm({ ...rankForm, Name: e.target.value })}
-                    className="w-full bg-bg-secondary/50 border border-border/60 rounded-xl pl-11 pr-4 py-3 text-primary text-base focus:outline-none focus:border-accent transition-colors placeholder:text-muted/50"
-                    placeholder={t('ui.pages.access.ranks.name_placeholder')}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="px-6 py-5 border-t border-border/60 flex gap-3 shrink-0">
-              <button
-                onClick={() => {
-                  setIsAddRankModalOpen(false);
-                  setRankToEdit(null);
-                }}
-                className="flex-1 py-3 rounded-xl bg-bg-secondary/70 hover:bg-bg-secondary text-muted hover:text-primary font-medium text-sm transition-colors"
-              >
+        <Modal
+          title={rankToEdit ? t('ui.pages.access.ranks.modify') : t('ui.pages.access.ranks.register')}
+          subtitle={t('ui.pages.access.ranks.authority_config')}
+          media={
+            <IconTile className="w-10 h-10 rounded-lg">{rankToEdit ? <Pencil size={16} /> : <Plus size={16} />}</IconTile>
+          }
+          onClose={closeRankModal}
+          footer={
+            <>
+              <Button variant="ghost" onClick={closeRankModal}>
                 {t('ui.pages.access.ranks.discard')}
-              </button>
-              <button
-                onClick={handleSaveRank}
+              </Button>
+              <Button
+                variant="primary"
+                icon={<Check size={14} />}
                 disabled={!rankForm.Id || !rankForm.Name}
-                className="flex-[2] py-3 rounded-xl bg-accent hover:bg-accent/90 text-white font-medium text-sm transition-colors disabled:opacity-30 flex items-center justify-center gap-2"
+                onClick={handleSaveRank}
               >
-                <i className="fa-solid fa-check"></i>
                 {t('ui.pages.access.ranks.commit')}
-              </button>
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-5">
+            <div>
+              <Label>{t('ui.pages.access.ranks.id_label')}</Label>
+              <input
+                type="text"
+                value={rankForm.Id || ''}
+                onChange={(e) => setRankForm({ ...rankForm, Id: e.target.value })}
+                disabled={!!rankToEdit}
+                className={cn(inputClass, 'font-mono text-sm disabled:opacity-50')}
+                placeholder={t('ui.pages.access.ranks.id_placeholder')}
+              />
+              {!rankToEdit && <p className="text-sm text-primary/60 mt-2">{t('ui.pages.access.ranks.id_note')}</p>}
+            </div>
+            <div>
+              <Label>{t('ui.pages.access.ranks.name_label')}</Label>
+              <input
+                type="text"
+                value={rankForm.Name || ''}
+                onChange={(e) => setRankForm({ ...rankForm, Name: e.target.value })}
+                className={inputClass}
+                placeholder={t('ui.pages.access.ranks.name_placeholder')}
+              />
             </div>
           </div>
-        </div>
+        </Modal>
       )}
 
       {rankToDelete && (
-        <div className="absolute inset-0 bg-black/70 z-50 flex items-center justify-center p-6">
-          <div className="bg-bg-primary border border-danger/30 rounded-2xl w-full max-w-md overflow-hidden flex flex-col">
-            <div className="px-6 py-5 border-b border-border/60 flex items-start justify-between shrink-0">
-              <div className="flex items-center gap-3.5">
-                <div className="w-11 h-11 rounded-xl bg-danger/12 border border-danger/25 flex items-center justify-center text-danger shrink-0">
-                  <i className="fa-solid fa-triangle-exclamation text-lg"></i>
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-primary leading-none">
-                    {t('ui.pages.access.ranks.delete_rank_title')}
-                  </h2>
-                  <p className="text-sm text-danger mt-1.5">{t('ui.pages.access.ranks.irreversible_action')}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setRankToDelete(null)}
-                className="w-8 h-8 rounded-lg hover:bg-bg-secondary text-muted hover:text-primary transition-colors flex items-center justify-center"
-              >
-                <i className="fa-solid fa-xmark text-sm"></i>
-              </button>
-            </div>
-
-            <div className="p-6 text-center">
-              <p className="text-muted leading-relaxed text-sm">
-                You are about to delete the{' '}
-                <span className="text-primary font-medium px-2 py-0.5 rounded-md bg-bg-secondary/70">
-                  {rankToDelete.Name}
-                </span>{' '}
-                rank.
-                <br />
-                <br />
-                This immediately revokes access for all assigned staff members and cannot be undone.
-              </p>
-            </div>
-
-            <div className="px-6 py-5 border-t border-border/60 flex gap-3 shrink-0">
-              <button
-                onClick={() => setRankToDelete(null)}
-                className="flex-1 py-3 rounded-xl bg-bg-secondary/70 hover:bg-bg-secondary text-muted hover:text-primary font-medium text-sm transition-colors"
-              >
+        <Modal
+          title={t('ui.pages.access.ranks.delete_rank_title')}
+          subtitle={t('ui.pages.access.ranks.irreversible_action')}
+          media={
+            <IconTile tone="danger" className="w-10 h-10 rounded-lg">
+              <TriangleAlert size={16} />
+            </IconTile>
+          }
+          onClose={() => setRankToDelete(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setRankToDelete(null)}>
                 {t('common.cancel')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="danger"
+                className="bg-danger text-white hover:bg-danger/80"
+                icon={<Trash2 size={14} />}
                 onClick={handleDeleteRank}
-                className="flex-[2] py-3 rounded-xl bg-danger hover:bg-danger/90 text-white font-medium text-sm transition-colors flex items-center justify-center gap-2"
               >
-                <i className="fa-solid fa-trash-can"></i>
                 {t('ui.pages.access.management.purge_title')}
-              </button>
-            </div>
-          </div>
-        </div>
+              </Button>
+            </>
+          }
+        >
+          <p className="text-base text-primary/80 leading-relaxed">
+            {t('ui.pages.access.ranks.delete_rank_desc', rankToDelete.Name, adminCountByRank.get(rankToDelete.Id) ?? 0)}
+          </p>
+        </Modal>
       )}
 
-      {(isAddAdminModalOpen || adminToEdit) && (
-        <div className="absolute inset-0 bg-black/70 z-50 flex items-center justify-center p-6">
-          <div className="bg-bg-primary border border-border rounded-2xl w-full max-w-[520px] flex flex-col overflow-hidden">
-            {/* Header */}
-            <div className="px-6 py-5 flex items-center justify-between shrink-0 border-b border-border/60">
-              <div className="flex items-center gap-3.5">
-                <div className="w-10 h-10 rounded-xl bg-accent/10 border border-accent/20 flex items-center justify-center text-accent">
-                  <i className={`fa-solid ${adminToEdit ? 'fa-user-pen' : 'fa-user-plus'} text-base`}></i>
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold text-primary leading-none">
-                    {adminToEdit
-                      ? t('ui.pages.access.management.edit_title')
-                      : t('ui.pages.access.management.add_title')}
-                  </h2>
-                  <p className="text-sm text-muted mt-1.5">{t('ui.pages.access.management.auth_subtitle')}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setIsAddAdminModalOpen(false);
-                  setAdminToEdit(null);
-                }}
-                className="w-8 h-8 rounded-lg hover:bg-bg-secondary text-muted hover:text-primary transition-colors flex items-center justify-center"
-              >
-                <i className="fa-solid fa-xmark text-sm"></i>
-              </button>
-            </div>
-
-            <div className="p-6 space-y-5">
-              {/* Identification */}
-              <div className="flex gap-3">
-                <div className="w-1/3 flex flex-col relative">
-                  <label className="text-sm font-medium text-muted mb-2">{t('ui.pages.access.management.type')}</label>
-                  <button
-                    onClick={(e) => {
-                      const position = dropdownPositionFrom(e.currentTarget);
-                      setDropdown((prev) => {
-                        if (prev && prev.id === 'method-selector') return null;
-                        return {
-                          id: 'method-selector',
-                          name: t('ui.pages.access.management.id_method'),
-                          options: [
-                            {
-                              Text: t('ui.pages.access.management.methods.license'),
-                              Callback: () => {
-                                setIdType('LICENSE');
-                                setAdminForm((p) => ({ ...p, Identifier: '', CharacterId: '', DiscordRoles: [] }));
-                              },
-                            },
-                            {
-                              Text: t('ui.pages.access.management.methods.steam'),
-                              Callback: () => {
-                                setIdType('STEAM');
-                                setAdminForm((p) => ({ ...p, Identifier: '', CharacterId: '', DiscordRoles: [] }));
-                              },
-                            },
-                            {
-                              Text: t('ui.pages.access.management.methods.discord'),
-                              Callback: () => {
-                                setIdType('DISCORD');
-                                setAdminForm((p) => ({ ...p, Identifier: '', CharacterId: '', DiscordRoles: [] }));
-                              },
-                            },
-                            {
-                              Text: t('ui.pages.access.management.methods.discord_role'),
-                              Callback: () => {
-                                setIdType('DISCORD ROLE');
-                                setAdminForm((p) => ({ ...p, Identifier: '', CharacterId: '', DiscordRoles: [] }));
-                              },
-                            },
-                            {
-                              Text: t('ui.pages.access.management.methods.player'),
-                              Callback: () => {
-                                setIdType('CHARACTER');
-                                setAdminForm((p) => ({ ...p, Identifier: '', CharacterId: '', DiscordRoles: [] }));
-                              },
-                            },
-                          ],
-                          position,
-                          hasSearch: false,
-                        };
-                      });
-                    }}
-                    className="w-full bg-bg-secondary/50 border border-border/60 hover:border-border rounded-xl px-3 py-2.5 text-primary text-sm font-medium flex items-center justify-between transition-colors"
-                  >
-                    <span className="flex items-center gap-2 truncate">
-                      <i
-                        className={`${idType === 'STEAM' ? 'fa-brands fa-steam' : idType === 'DISCORD' ? 'fa-brands fa-discord' : idType === 'DISCORD ROLE' ? 'fa-solid fa-users-gear' : idType === 'CHARACTER' ? 'fa-solid fa-user-tag' : 'fa-solid fa-address-card'} text-accent/80 text-xs`}
-                      ></i>
-                      <span className="truncate">
-                        {idType === 'DISCORD ROLE'
-                          ? t('ui.pages.access.management.methods.discord_role')
-                          : idType === 'CHARACTER'
-                            ? t('ui.pages.access.management.methods.player')
-                            : idType === 'DISCORD'
-                              ? t('ui.pages.access.management.methods.discord')
-                              : idType.charAt(0) + idType.slice(1).toLowerCase()}
-                      </span>
-                    </span>
-                    <i className="fa-solid fa-chevron-down text-[10px] text-muted shrink-0"></i>
-                  </button>
-                </div>
-
-                <div className="w-2/3 flex flex-col">
-                  <label className="text-sm font-medium text-muted mb-2 flex justify-between">
-                    {t('ui.pages.access.management.identifier')}
-                    {(idType === 'CHARACTER' || idType === 'DISCORD ROLE') && (
-                      <span className="text-muted/70 font-normal">
-                        {t('ui.pages.access.management.search_to_select')}
-                      </span>
-                    )}
-                  </label>
-
-                  {idType === 'CHARACTER' ? (
-                    <div className="relative">
-                      <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-muted text-xs"></i>
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        onFocus={() => setIsPlayerSearchFocused(true)}
-                        onBlur={() => setTimeout(() => setIsPlayerSearchFocused(false), 200)}
-                        placeholder={t('ui.pages.access.management.search_player')}
-                        className="w-full bg-bg-secondary/50 border border-border/60 rounded-xl pl-9 pr-3 py-2.5 text-primary text-sm focus:outline-none focus:border-accent/60 transition-colors placeholder:text-muted/60"
-                      />
-                      {(searchQuery || isPlayerSearchFocused) && (
-                        <div className="absolute top-full left-0 right-0 mt-1 max-h-40 overflow-y-auto custom-scrollbar bg-bg-secondary border border-border rounded-xl z-20">
-                          {(dbPlayers.length > 0 ? dbPlayers : players)
-                            .filter(
-                              (p) =>
-                                p.Name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                                (p.CitizenId && p.CitizenId.toLowerCase().includes(searchQuery.toLowerCase())),
-                            )
-                            .slice(0, 50)
-                            .map((p) => {
-                              const isSelected =
-                                adminForm.CharacterId === p.CitizenId || adminForm.Identifier === p.License;
-                              return (
-                                <div
-                                  key={p.CitizenId || p.ServerId}
-                                  className={`w-full p-2.5 text-sm flex items-center justify-between border-b border-border/40 last:border-0 hover:bg-bg-primary/50 ${isSelected ? 'bg-accent/8' : ''}`}
-                                >
-                                  <div className="flex flex-col min-w-0 pr-2">
-                                    <span
-                                      className={`font-medium truncate ${isSelected ? 'text-accent' : 'text-primary'}`}
-                                    >
-                                      {p.Name}
-                                    </span>
-                                    <span className="text-[11px] font-mono text-muted truncate">
-                                      CID: {p.CitizenId || 'Unknown'}
-                                    </span>
-                                  </div>
-                                  <div className="flex gap-1 shrink-0">
-                                    {p.CitizenId && (
-                                      <button
-                                        onClick={() => {
-                                          setAdminForm({
-                                            ...adminForm,
-                                            Identifier: p.CitizenId,
-                                            CharacterId: p.CitizenId,
-                                          });
-                                          setSearchQuery('');
-                                        }}
-                                        className="px-2 py-1 bg-success/10 hover:bg-success/20 rounded-md text-[11px] font-medium text-success transition-colors"
-                                        title={t('ui.pages.access.management.add_by_cid')}
-                                      >
-                                        CID
-                                      </button>
-                                    )}
-                                    {p.License && (
-                                      <button
-                                        onClick={() => {
-                                          setAdminForm({
-                                            ...adminForm,
-                                            Identifier: p.License,
-                                            CharacterId: p.CitizenId || '',
-                                          });
-                                          setSearchQuery('');
-                                        }}
-                                        className="px-2 py-1 bg-bg-primary/70 hover:bg-bg-primary rounded-md text-[11px] font-medium text-muted transition-colors"
-                                        title={t('ui.pages.access.management.add_by_license')}
-                                      >
-                                        Lic
-                                      </button>
-                                    )}
-                                  </div>
-                                </div>
-                              );
-                            })}
-                        </div>
-                      )}
-                      {adminForm.Identifier && !searchQuery && (
-                        <div className="absolute inset-y-0 right-3 flex items-center pointer-events-none">
-                          <span className="text-[11px] bg-accent/15 text-accent px-1.5 py-0.5 rounded font-mono font-medium">
-                            Set ✓
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  ) : idType === 'DISCORD ROLE' ? (
-                    <div className="relative flex flex-col gap-2">
-                      <div className="relative">
-                        <i className="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-muted text-xs"></i>
-                        <input
-                          type="text"
-                          value={searchQuery}
-                          onChange={(e) => setSearchQuery(e.target.value)}
-                          onFocus={() => setIsRoleSearchFocused(true)}
-                          onBlur={() => setTimeout(() => setIsRoleSearchFocused(false), 200)}
-                          placeholder={t('ui.pages.access.management.search_role')}
-                          className="w-full bg-bg-secondary/50 border border-border/60 rounded-xl pl-9 pr-3 py-2.5 text-primary text-sm focus:outline-none focus:border-accent/60 transition-colors placeholder:text-muted/60"
-                        />
-                        {(searchQuery || isRoleSearchFocused) && (
-                          <div className="absolute top-full left-0 right-0 mt-1 max-h-48 overflow-y-auto custom-scrollbar bg-bg-secondary border border-border rounded-xl z-20 p-1">
-                            {discordRoles.length === 0 ? (
-                              <div className="p-3 text-center text-muted text-xs">
-                                <i className="fa-brands fa-discord text-xl mb-1 text-warning opacity-70"></i>
-                                <p className="font-medium">{t('ui.pages.access.management.no_discord_roles')}</p>
-                                <p className="mt-1 opacity-70">
-                                  Discord Bot Token & Guild ID are not configured or Discord API is offline.
-                                </p>
-                              </div>
-                            ) : (
-                              discordRoles
-                                .filter((r) => r.name.toLowerCase().includes(searchQuery.toLowerCase()))
-                                .slice(0, 50)
-                                .map((r) => {
-                                  const isSelected = adminForm.DiscordRoles?.includes(r.id);
-                                  const roleColor = r.color
-                                    ? `#${r.color.toString(16).padStart(6, '0')}`
-                                    : 'rgb(var(--accent))';
-                                  return (
-                                    <button
-                                      key={r.id}
-                                      onClick={() => {
-                                        const currentRoles = adminForm.DiscordRoles || [];
-                                        const alreadyIn = currentRoles.includes(r.id);
-                                        const newRoles = alreadyIn
-                                          ? currentRoles.filter((id) => id !== r.id)
-                                          : [...currentRoles, r.id];
-
-                                        setAdminForm({
-                                          ...adminForm,
-                                          Identifier: newRoles.length > 0 ? `role:${newRoles[0]}` : '',
-                                          DiscordRoles: newRoles,
-                                        });
-                                        setSearchQuery('');
-                                      }}
-                                      className={`w-full text-left p-2 rounded-lg text-sm flex items-center justify-between hover:bg-bg-primary/50 transition-colors mb-0.5 ${isSelected ? 'bg-accent/10' : ''}`}
-                                    >
-                                      <span className="flex items-center gap-2">
-                                        <div
-                                          className="w-3 h-3 rounded-full"
-                                          style={{ backgroundColor: roleColor }}
-                                        ></div>
-                                        <span className={isSelected ? 'text-accent font-medium' : 'text-primary'}>
-                                          {r.name}
-                                        </span>
-                                      </span>
-                                      {isSelected && <i className="fa-solid fa-check text-[11px] text-accent"></i>}
-                                    </button>
-                                  );
-                                })
-                            )}
-
-                            {/* Manual add fallback */}
-                            {searchQuery.trim() && (
-                              <button
-                                onClick={() => {
-                                  const cleanQuery = searchQuery.trim();
-                                  const currentRoles = adminForm.DiscordRoles || [];
-                                  const alreadyIn = currentRoles.includes(cleanQuery);
-                                  const newRoles = alreadyIn
-                                    ? currentRoles.filter((id) => id !== cleanQuery)
-                                    : [...currentRoles, cleanQuery];
-
-                                  setAdminForm({
-                                    ...adminForm,
-                                    Identifier: newRoles.length > 0 ? `role:${newRoles[0]}` : '',
-                                    DiscordRoles: newRoles,
-                                  });
-                                  setSearchQuery('');
-                                }}
-                                className="w-full text-left p-2 rounded-lg text-xs bg-accent/10 hover:bg-accent/20 text-accent transition-colors flex items-center justify-between mt-1"
-                              >
-                                <span className="flex items-center gap-2 font-medium">
-                                  <i className="fa-solid fa-plus text-xs"></i>
-                                  <span>
-                                    {t('ui.pages.access.management.use_custom_role_id')}{' '}
-                                    <strong className="font-mono text-primary ml-1">{searchQuery}</strong>
-                                  </span>
-                                </span>
-                                <i className="fa-solid fa-chevron-right text-[10px]"></i>
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Selected role chips */}
-                      {adminForm.DiscordRoles && adminForm.DiscordRoles.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 p-2 bg-bg-secondary/40 rounded-xl border border-border/50">
-                          {adminForm.DiscordRoles.map((roleId) => {
-                            const role = discordRoles.find((r) => r.id === roleId);
-                            const roleColor = role?.color
-                              ? `#${role.color.toString(16).padStart(6, '0')}`
-                              : 'rgb(var(--accent))';
-                            return (
-                              <div
-                                key={roleId}
-                                className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-bg-primary/50 border border-border/50 text-[11px] font-medium text-primary"
-                                style={{ borderLeft: `3px solid ${roleColor}` }}
-                              >
-                                {role?.name || roleId}
-                                <button
-                                  onClick={() =>
-                                    setAdminForm((prev) => ({
-                                      ...prev,
-                                      DiscordRoles: prev.DiscordRoles?.filter((id) => id !== roleId),
-                                    }))
-                                  }
-                                  className="text-muted hover:text-danger transition-colors"
-                                >
-                                  <i className="fa-solid fa-xmark"></i>
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-1 w-full">
-                      <input
-                        type="text"
-                        value={adminForm.Identifier || ''}
-                        onChange={(e) => setAdminForm({ ...adminForm, Identifier: e.target.value })}
-                        onBlur={(e) => {
-                          let val = e.target.value;
-                          if (idType === 'STEAM') {
-                            val = formatSteamIdentifier(val);
-                            setAdminForm((prev) => ({ ...prev, Identifier: val }));
-                          }
-                        }}
-                        className="w-full bg-bg-secondary/50 border border-border/60 hover:border-border rounded-xl px-3 py-2.5 text-primary font-mono text-sm focus:outline-none focus:border-accent transition-colors placeholder:text-muted/50"
-                        placeholder={`Enter ${idType.toLowerCase()}...`}
-                      />
-                      {idType === 'STEAM' && (
-                        <div className="text-[11px] text-muted leading-tight mt-1 flex flex-col gap-0.5">
-                          <span>• Accepts SteamID64 (e.g. 76561199066607211), profiles URL, or Steam Hex.</span>
-                          <span className="text-warning/80">
-                            • Custom /id/ vanity URLs must be converted to SteamID64 first.
-                          </span>
-                        </div>
-                      )}
-                      {idType === 'DISCORD' && (
-                        <div className="text-[11px] text-muted leading-tight mt-1">
-                          <span>• Enter raw Discord User ID (e.g. 767828210139834159).</span>
-                        </div>
-                      )}
-                      {idType === 'LICENSE' && (
-                        <div className="text-[11px] text-muted leading-tight mt-1">
-                          <span>• Enter raw FiveM License (e.g. license:abc123xyz...).</span>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                  {adminForm.Identifier && (idType === 'CHARACTER' || idType === 'DISCORD ROLE') && (
-                    <div className="mt-1.5 text-[11px] font-mono text-accent/80 truncate w-full flex items-center gap-1.5">
-                      <span className="text-muted">{t('ui.pages.access.management.selected')}</span>
-                      <span className="text-primary font-medium">
-                        {idType === 'DISCORD ROLE'
-                          ? adminForm.DiscordRoles && adminForm.DiscordRoles.length > 1
-                            ? `${adminForm.DiscordRoles.length} Roles Selected (${discordRoles.find((r) => r.id === adminForm.DiscordRoles?.[0])?.name}...)`
-                            : discordRoles.find((r) => `role:${r.id}` === adminForm.Identifier)?.name ||
-                              adminForm.Identifier
-                          : dbPlayers.find(
-                              (p) =>
-                                p.CitizenId === adminForm.Identifier ||
-                                p.Steam === adminForm.Identifier ||
-                                p.License === adminForm.Identifier,
-                            )?.Name || adminForm.Identifier}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Rank */}
-              <div className="flex flex-col relative z-0">
-                <label className="text-sm font-medium text-muted mb-2">
-                  {t('ui.pages.access.management.authority_level')}
-                </label>
-                <button
-                  onClick={(e) => {
-                    const position = dropdownPositionFrom(e.currentTarget);
-                    setDropdown((prev) => {
-                      if (prev && prev.id === 'rank-selector') return null;
-                      return {
-                        id: 'rank-selector',
-                        name: 'Select Rank',
-                        options: ranks.map((r) => ({
-                          Text: `${r.Name} (${r.Permissions.length} perms)`,
-                          Callback: () => setAdminForm((p) => ({ ...p, RankId: r.Id })),
-                        })),
-                        position,
-                        hasSearch: false,
-                      };
-                    });
-                  }}
-                  className="w-full bg-bg-secondary/50 border border-border/60 hover:border-accent/50 rounded-xl px-4 py-3 text-primary text-sm font-medium flex items-center justify-between transition-colors"
-                >
-                  <span className="flex items-center gap-3">
-                    <div className="w-6 h-6 rounded-md bg-accent text-white flex items-center justify-center shrink-0">
-                      <i className="fa-solid fa-shield-halved text-[10px]"></i>
-                    </div>
-                    {ranks.find((r) => r.Id === adminForm.RankId)?.Name || 'Select a rank...'}
-                  </span>
-                  <div className="flex items-center gap-2">
-                    {adminForm.RankId && (
-                      <span className="text-[11px] font-mono text-accent bg-accent/10 px-1.5 py-0.5 rounded">
-                        {ranks.find((r) => r.Id === adminForm.RankId)?.Permissions.length} perms
-                      </span>
-                    )}
-                    <i className="fa-solid fa-chevron-down text-[10px] text-muted ml-1"></i>
-                  </div>
-                </button>
-              </div>
-
-              {/* Webhook */}
-              <div className="flex flex-col relative z-0">
-                <label className="text-sm font-medium text-muted mb-2 flex items-center justify-between">
-                  <span>Discord Webhook</span>
-                  <span className="text-[10px] bg-bg-secondary px-1.5 py-0.5 rounded text-muted">Optional</span>
-                </label>
-                <input
-                  type="text"
-                  value={adminForm.Webhook || ''}
-                  onChange={(e) => setAdminForm({ ...adminForm, Webhook: e.target.value })}
-                  className="w-full bg-bg-secondary/50 border border-border/60 hover:border-border rounded-xl px-4 py-3 text-primary text-sm focus:outline-none focus:border-accent transition-colors placeholder:text-muted/50"
-                  placeholder="Leave empty to auto-generate..."
-                />
-                <div className="mt-3">
-                  <label className="text-[11px] font-medium text-muted mb-1.5 block">Events to Log</label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {['all', 'ban', 'kick', 'unban', 'report', 'duty', 'adminlog', 'exploit', 'warn'].map((ev) => {
-                      const isSelected = (adminForm.WebhookEvents || ['all']).includes(ev);
-                      return (
-                        <button
-                          key={ev}
-                          onClick={() => {
-                            let current = adminForm.WebhookEvents || ['all'];
-                            if (ev === 'all') current = ['all'];
-                            else {
-                              current = current.filter((e) => e !== 'all');
-                              if (current.includes(ev)) current = current.filter((e) => e !== ev);
-                              else current = [...current, ev];
-                              if (current.length === 0) current = ['all'];
-                            }
-                            setAdminForm({ ...adminForm, WebhookEvents: current });
-                          }}
-                          className={`px-2 py-1 rounded-md text-[11px] font-medium transition-colors ${isSelected ? 'bg-accent/15 text-accent border border-accent/30' : 'bg-bg-secondary border border-border/50 text-muted hover:text-primary'}`}
-                        >
-                          {ev.charAt(0).toUpperCase() + ev.slice(1)}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-
-              {/* Expiration */}
-              <div className="flex flex-col">
-                <div className="flex items-center justify-between mb-3 border-t border-border/50 pt-4">
-                  <label className="text-sm font-medium text-muted">
-                    {t('ui.pages.access.management.access_expiration')}
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const now = new Date();
-                      const newIsTemp = !adminForm.IsTemp;
-                      const nextForm = { ...adminForm, IsTemp: newIsTemp };
-                      if (newIsTemp && !adminForm.Expires) {
-                        nextForm.Expires = {
-                          day: now.getDate() + 1,
-                          month: now.getMonth() + 1,
-                          year: now.getFullYear(),
-                          hour: now.getHours(),
-                          min: now.getMinutes(),
-                        };
-                      }
-                      setAdminForm(nextForm);
-                    }}
-                    className={`flex items-center gap-1.5 text-xs font-medium transition-colors ${adminForm.IsTemp ? 'text-warning' : 'text-muted hover:text-primary'}`}
-                  >
-                    <i
-                      className={`fa-solid ${adminForm.IsTemp ? 'fa-toggle-on text-base' : 'fa-toggle-off text-base'} transition-all`}
-                    ></i>
-                    <span className="leading-none">{t('ui.pages.access.management.temp_status')}</span>
-                  </button>
-                </div>
-
-                {adminForm.IsTemp ? (
-                  <div className="bg-warning/[0.06] border border-warning/20 rounded-xl p-4">
-                    <DateTimePicker
-                      value={
-                        typeof adminForm.Expires === 'number'
-                          ? (function () {
-                              const d = new Date(adminForm.Expires * 1000);
-                              return {
-                                day: d.getDate(),
-                                month: d.getMonth() + 1,
-                                year: d.getFullYear(),
-                                hour: d.getHours(),
-                                min: d.getMinutes(),
-                              };
-                            })()
-                          : adminForm.Expires
-                      }
-                      onChange={(val) => setAdminForm({ ...adminForm, Expires: val })}
-                    />
-                    <div className="mt-3 flex items-center gap-2 text-[11px] text-warning/80 font-medium">
-                      <i className="fa-solid fa-circle-exclamation"></i>
-                      <span>{t('ui.pages.access.management.temp_status_desc')}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-bg-secondary/40 border border-border/50 rounded-xl py-3 px-4 flex items-center gap-3">
-                    <i className="fa-solid fa-infinity text-accent/60 text-base"></i>
-                    <span className="text-xs text-accent/80 font-medium">
-                      {t('ui.pages.access.management.perm_registry_active')}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Footer */}
-            <div className="p-6 border-t border-border/60 flex flex-col gap-3 shrink-0">
-              {duplicateAdminError && (
-                <div className="flex items-center gap-2 text-[11px] text-danger font-medium bg-danger/10 border border-danger/30 rounded-lg py-2 px-3">
-                  <i className="fa-solid fa-triangle-exclamation"></i>
-                  <span>{t('ui.pages.access.management.already_admin')}</span>
-                </div>
-              )}
-              <div className="flex gap-3">
-                <button
-                  onClick={() => {
-                    setIsAddAdminModalOpen(false);
-                    setAdminToEdit(null);
-                    setDropdown(null);
-                  }}
-                  className="flex-1 py-3 rounded-xl bg-bg-secondary/70 hover:bg-bg-secondary text-muted hover:text-primary font-medium text-sm transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveAdmin}
-                  disabled={!adminForm.Identifier || !adminForm.RankId}
-                  className="flex-[2] py-3 rounded-xl bg-accent hover:bg-accent/90 text-white font-medium text-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  <i className={`fa-solid ${adminToEdit ? 'fa-check' : 'fa-user-shield'} text-xs`}></i>
-                  Confirm
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {(isAddAdminModalOpen || adminToEdit) && renderAdminModal()}
 
       {adminToDelete && (
-        <div className="absolute inset-0 bg-black/70 z-50 flex items-center justify-center p-6">
-          <div className="bg-bg-primary border border-danger/30 rounded-2xl w-full max-w-md p-6">
-            <div className="w-14 h-14 rounded-2xl bg-danger/12 border border-danger/25 flex items-center justify-center text-danger text-2xl mx-auto mb-5">
-              <i className="fa-solid fa-triangle-exclamation"></i>
-            </div>
-            <h2 className="text-xl font-semibold text-primary mb-3 text-center leading-tight">Revoke access</h2>
-            <p className="text-muted text-center mb-7 text-sm leading-relaxed">
-              This removes all administrative privileges from{' '}
-              <span className="text-danger font-mono bg-danger/12 px-2 py-0.5 rounded-md font-medium">
-                {adminToDelete.Identifier}
-              </span>{' '}
-              across the system.
-            </p>
-
-            <div className="flex gap-3">
-              <button
-                onClick={() => setAdminToDelete(null)}
-                className="flex-1 py-3 rounded-xl font-medium text-sm bg-bg-secondary/70 hover:bg-bg-secondary text-muted hover:text-primary transition-colors"
-              >
-                Cancel
-              </button>
-              <button
+        <Modal
+          title={t('ui.pages.access.management.revoke_title')}
+          subtitle={t('ui.pages.access.ranks.irreversible_action')}
+          media={
+            <IconTile tone="danger" className="w-10 h-10 rounded-lg">
+              <TriangleAlert size={16} />
+            </IconTile>
+          }
+          onClose={() => setAdminToDelete(null)}
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setAdminToDelete(null)}>
+                {t('common.cancel')}
+              </Button>
+              <Button
+                variant="danger"
+                className="bg-danger text-white hover:bg-danger/80"
+                icon={<Trash2 size={14} />}
                 onClick={handleDeleteAdmin}
-                className="flex-1 py-3 rounded-xl font-medium text-sm bg-danger hover:bg-danger/90 text-white flex items-center justify-center gap-2 transition-colors"
               >
-                <i className="fa-solid fa-trash-can text-sm"></i>
-                Delete
-              </button>
-            </div>
+                {t('ui.pages.access.management.revoke')}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <p className="text-base text-primary/80 leading-relaxed">
+              {t('ui.pages.access.management.revoke_desc', detailsOf(adminToDelete).displayName)}
+            </p>
+            <p className="font-mono text-sm text-danger bg-danger/10 border border-danger/20 rounded-lg px-3 py-2 break-all">
+              {adminToDelete.Identifier}
+            </p>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

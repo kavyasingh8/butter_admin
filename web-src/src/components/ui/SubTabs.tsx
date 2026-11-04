@@ -53,7 +53,7 @@ export const SubTabs = <T extends string>({
             className={cn(
               'relative px-4 py-2 rounded-lg font-rajdhani font-bold tracking-wider uppercase text-xs transition-colors duration-300 flex items-center gap-2 outline-none group justify-center',
               fullWidth ? 'flex-1' : '',
-              isActive ? 'text-white' : 'text-muted hover:text-primary',
+              isActive ? 'text-white' : 'text-primary/80 hover:text-primary',
               tabClassName,
             )}
           >
@@ -79,7 +79,7 @@ export const SubTabs = <T extends string>({
                 <span
                   className={cn(
                     'px-1.5 py-0.5 rounded-md text-[10px] font-mono transition-colors duration-300',
-                    isActive ? 'bg-white/20 text-white' : 'bg-white/5 text-muted group-hover:text-primary',
+                    isActive ? 'bg-white/20 text-white' : 'bg-white/5 text-primary/80 group-hover:text-primary',
                   )}
                 >
                   {tab.count}

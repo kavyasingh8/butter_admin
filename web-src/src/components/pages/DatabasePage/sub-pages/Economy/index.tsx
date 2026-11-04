@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Loader2, Wallet } from 'lucide-react';
+import { Banknote, Bitcoin, Crown, Landmark, Loader2, TrendingUp, Wallet } from 'lucide-react';
 import { useAdminMenu } from '../../../../../providers/AdminMenuContext';
 import Pagination from '../../../../ui/Pagination';
-import { Column, DataTable, EmptyState, Panel, PanelHeader, Segmented, StatStrip, formatMoney } from '../../ui';
+import { cn } from '../../../../../utils/cn';
+import { Avatar, Column, DataTable, EmptyState, Panel, PanelHeader, Segmented, StatStrip, formatMoney } from '../../ui';
+
+const PODIUM = ['text-amber-400 bg-amber-400/10 border-amber-400/30', 'text-slate-300 bg-slate-300/10 border-slate-300/30', 'text-orange-400 bg-orange-400/10 border-orange-400/30'];
 
 const ITEMS_PER_PAGE = 20;
 
@@ -37,7 +40,7 @@ const Economy: React.FC<{ searchQuery?: string }> = ({ searchQuery = '' }) => {
 
   if (!economy) {
     return (
-      <div className="flex h-full items-center justify-center text-muted">
+      <div className="flex h-full items-center justify-center text-primary/80">
         <Loader2 size={18} className="animate-spin" />
       </div>
     );
@@ -52,29 +55,43 @@ const Economy: React.FC<{ searchQuery?: string }> = ({ searchQuery = '' }) => {
     {
       key: 'rank',
       header: '#',
-      width: '48px',
-      render: (p) => <span className="text-sm text-muted tabular-nums">{p.rank}</span>,
+      width: '64px',
+      render: (p) => (
+        <span
+          className={cn(
+            'w-8 h-8 rounded-lg border flex items-center justify-center font-rajdhani font-bold tabular-nums',
+            PODIUM[p.rank - 1] ?? 'text-primary/80 bg-white/5 border-white/5',
+          )}
+        >
+          {p.rank <= PODIUM.length ? <Crown size={14} /> : p.rank}
+        </span>
+      ),
     },
     {
       key: 'name',
       header: t('ui.pages.database.economy.player_header'),
       width: 'minmax(0,2fr)',
-      render: (p) => <span className="text-primary truncate">{p.name}</span>,
+      render: (p) => (
+        <span className="flex items-center gap-3 min-w-0">
+          <Avatar name={p.name} />
+          <span className="text-primary font-semibold truncate">{p.name}</span>
+        </span>
+      ),
     },
     {
       key: 'amount',
       header: t('ui.pages.database.economy.balance_header'),
       width: 'minmax(0,1fr)',
       align: 'right',
-      render: (p) => <span className="tabular-nums text-success">{formatMoney(p.amount)}</span>,
+      render: (p) => <span className="tabular-nums font-semibold text-success">{formatMoney(p.amount)}</span>,
     },
     {
       key: 'share',
       header: t('ui.pages.database.economy.share_header'),
-      width: '80px',
+      width: '90px',
       align: 'right',
       render: (p) => (
-        <span className="text-sm text-muted tabular-nums">
+        <span className="font-mono text-sm text-primary/80 tabular-nums">
           {sortTotal > 0 ? `${((p.amount / sortTotal) * 100).toFixed(2)}%` : '-'}
         </span>
       ),
@@ -85,12 +102,27 @@ const Economy: React.FC<{ searchQuery?: string }> = ({ searchQuery = '' }) => {
     <div className="flex flex-col h-full gap-3">
       <StatStrip
         items={[
-          { label: t('ui.pages.database.economy.total_cash'), value: formatMoney(economy.TotalCash) },
-          { label: t('ui.pages.database.economy.total_bank'), value: formatMoney(economy.TotalBank) },
-          { label: t('ui.pages.database.economy.total_crypto'), value: economy.TotalCrypto.toLocaleString() },
+          {
+            label: t('ui.pages.database.economy.total_cash'),
+            value: formatMoney(economy.TotalCash),
+            icon: <Banknote size={18} />,
+            tone: 'success',
+          },
+          {
+            label: t('ui.pages.database.economy.total_bank'),
+            value: formatMoney(economy.TotalBank),
+            icon: <Landmark size={18} />,
+          },
+          {
+            label: t('ui.pages.database.economy.total_crypto'),
+            value: economy.TotalCrypto.toLocaleString(),
+            icon: <Bitcoin size={18} />,
+            tone: 'warning',
+          },
           {
             label: t('ui.pages.database.economy.combined_net_worth'),
             value: formatMoney(economy.TotalCash + economy.TotalBank),
+            icon: <TrendingUp size={18} />,
             tone: 'success',
           },
         ]}
@@ -118,10 +150,10 @@ const Economy: React.FC<{ searchQuery?: string }> = ({ searchQuery = '' }) => {
             columns={columns}
             rows={pageRows}
             rowKey={(p) => `${p.rank}-${p.name}`}
-            empty={<EmptyState icon={<Wallet size={28} />} title={t('ui.pages.database.economy.no_results')} />}
+            empty={<EmptyState icon={<Wallet size={40} />} title={t('ui.pages.database.economy.no_results')} />}
           />
           {ranked.length > ITEMS_PER_PAGE && (
-            <div className="px-4 py-2 border-t border-border/60">
+            <div className="px-4 py-2 border-t border-white/5">
               <Pagination
                 currentPage={currentPage}
                 totalItems={ranked.length}
@@ -133,19 +165,22 @@ const Economy: React.FC<{ searchQuery?: string }> = ({ searchQuery = '' }) => {
           )}
         </Panel>
 
-        <Panel className="w-[280px] shrink-0 flex flex-col overflow-hidden">
+        <Panel className="w-[300px] shrink-0 flex flex-col overflow-hidden">
           <PanelHeader title={t('ui.pages.database.economy.distribution')} />
-          <div className="p-4 space-y-4 overflow-y-auto custom-scrollbar">
+          <div className="p-4 space-y-3 overflow-y-auto custom-scrollbar">
             {economy.WealthDistribution.map((bucket) => (
-              <div key={bucket.range}>
-                <div className="flex items-center justify-between text-sm mb-1.5">
-                  <span className="text-muted">{bucket.range}</span>
-                  <span className="text-primary tabular-nums">
-                    {bucket.count} {t('ui.pages.database.economy.players_suffix')}
+              <div key={bucket.range} className="rounded-lg bg-black/20 border border-white/5 p-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-mono text-sm text-primary/80">{bucket.range}</span>
+                  <span className="text-base text-primary font-semibold tabular-nums">
+                    {bucket.count} <span className="text-primary/80 font-normal">{t('ui.pages.database.economy.players_suffix')}</span>
                   </span>
                 </div>
-                <div className="h-1.5 rounded-full bg-white/10 overflow-hidden">
-                  <div className="h-full rounded-full bg-accent" style={{ width: `${(bucket.count / maxBucket) * 100}%` }} />
+                <div className="h-1.5 rounded-full bg-white/5 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-accent/60 to-accent"
+                    style={{ width: `${(bucket.count / maxBucket) * 100}%` }}
+                  />
                 </div>
               </div>
             ))}

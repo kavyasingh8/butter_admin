@@ -266,8 +266,11 @@ function mockInventoryItems(seed: number): InventoryItem[] {
       name: item.name,
       label: item.label,
       count: 1 + ((seed + i) % 12),
-      slot: i + 1,
+      slot: i === count - 1 ? i + 3 : i + 1,
       image: `nui://qb-inventory/html/images/${item.name}.png`,
+      metadata: item.name.startsWith('weapon_')
+        ? { serial: `SN${100000 + seed * 37 + i}`, durability: 100 - ((seed + i) % 40), ammo: 12 }
+        : undefined,
     };
   });
 }

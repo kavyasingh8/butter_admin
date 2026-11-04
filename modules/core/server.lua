@@ -239,6 +239,7 @@ local SCHEMA = {
 
     [[CREATE TABLE IF NOT EXISTS `admin_staff` (
         `identifier` VARCHAR(60) PRIMARY KEY,
+        `name` VARCHAR(64) DEFAULT NULL,
         `rank_id` VARCHAR(50) NOT NULL,
         `is_temp` TINYINT(1) DEFAULT 0,
         `expires` BIGINT DEFAULT NULL,
@@ -307,6 +308,13 @@ MySQL.ready(function()
         local ok, err = pcall(MySQL.query.await, SCHEMA[i])
         if not ok then LogError('Schema statement failed:', err) end
     end
+
+    -- Installs created before admin names existed are missing the column.
+    local ok, err = pcall(function()
+        if MySQL.scalar.await("SHOW COLUMNS FROM `admin_staff` LIKE 'name'") then return end
+        MySQL.query.await('ALTER TABLE `admin_staff` ADD COLUMN `name` VARCHAR(64) DEFAULT NULL AFTER `identifier`')
+    end)
+    if not ok then LogError('Failed to add admin_staff.name:', err) end
     LogDebug('Database schema is ready')
     schemaReady:resolve(true)
 end)

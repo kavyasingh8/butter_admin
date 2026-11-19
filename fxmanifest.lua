@@ -6,6 +6,7 @@ name 'butter_admin'
 author 'ButterChilly & Guardian'
 description 'Admin menu with a React UI, access control, reports, bans and database tools'
 version '1.0.3'
+repository 'https://github.com/kavyasingh8/butter_admin'
 
 ui_page 'web/index.html'
 
@@ -82,6 +83,7 @@ server_scripts {
     'modules/dashboard/server.lua',
     'modules/monitoring/server.lua',
     'modules/commands/server.lua',
+    'modules/version/server.lua',
 }
 
 files {

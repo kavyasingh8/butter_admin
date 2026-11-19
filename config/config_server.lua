@@ -1,6 +1,8 @@
 -- Server only. Secrets are read from convars so they stay out of the files:
 --   set butter_admin_discord_token "..."   (keep these as `set`, never `setr`)
 
+Config.VersionCheck = true -- Check GitHub on start and print in the server console when an update is released
+
 Config.Discord = {
     guildId = '',
     botToken = '',
